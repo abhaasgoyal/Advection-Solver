@@ -63,6 +63,7 @@ static void updateBoundary(double *u, int ldu) {
   else {
     int topProc = (rank + Q) % nprocs, botProc = (rank - Q + nprocs) % nprocs;
     /* Send from all odd nodes first then send from all even nodes */
+    /* Only works till Q3 */
     if (comm_mode == 0) {
         if (rank % 2 == 0) {
           MPI_Send(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm);
@@ -82,10 +83,10 @@ static void updateBoundary(double *u, int ldu) {
     }
     else {
       MPI_Request request[4]; int nReq = 0;
-      MPI_Isend(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, 0, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Isend(&V(u, 1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, M_loc+1, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Isend(&V(u, M0 + M_loc    , N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Irecv(&V(u, M0            , N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Isend(&V(u, M0 + 1        , N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Irecv(&V(u, M0 + M_loc + 1, N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
       MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
     }
 
@@ -97,8 +98,12 @@ static void updateBoundary(double *u, int ldu) {
       V(u, i, 0) = V(u, i, N_loc);
       V(u, i, N_loc+1) = V(u, i, 1);
     }
-  } else {
-    // Collect it
+  }
+  else {
+    for (i = M0; i < M0 + M_loc + 2; i++) {
+      V(u, i, N0) = V(u, i, N0 + N_loc);
+      V(u, i, N0 + N_loc + 1) = V(u, i, N0 + 1);
+    }
   }
 } //updateBoundary()
 
