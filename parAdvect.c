@@ -61,38 +61,39 @@ static void updateBoundary(double *u, int ldu) {
     }
   }
   else {
-    int topProc = (rank + Q) % nprocs, botProc = (rank - Q + nprocs) % nprocs;
+    int botProc = (rank + Q) % nprocs, topProc = (rank - Q + nprocs) % nprocs; // Think of think as clockwise and anticlockwise
     /* Send from all odd nodes first then send from all even nodes */
     /* Only works till Q3 */
     if (comm_mode == 0) {
         if (rank % 2 == 0) {
-          MPI_Send(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm);
-          MPI_Recv(&V(u, 0, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm,
+          MPI_Send(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm);
+          MPI_Recv(&V(u, 0, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm,
                    MPI_STATUS_IGNORE);
-          MPI_Send(&V(u, 1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm);
-          MPI_Recv(&V(u, M_loc+1, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG,
+          MPI_Send(&V(u, 1, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm);
+          MPI_Recv(&V(u, M_loc+1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG,
                    comm, MPI_STATUS_IGNORE);
         } else {
-          MPI_Recv(&V(u, 0, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm,
+          MPI_Recv(&V(u, 0, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm,
                    MPI_STATUS_IGNORE);
-          MPI_Send(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm);
-          MPI_Recv(&V(u, M_loc+1, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG,
+          MPI_Send(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm);
+          MPI_Recv(&V(u, M_loc+1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG,
                    comm, MPI_STATUS_IGNORE);
-          MPI_Send(&V(u, 1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm);
+          MPI_Send(&V(u, 1, 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm);
         }
     }
     else {
       MPI_Request request[4]; int nReq = 0;
-      MPI_Isend(&V(u, M0 + M_loc    , N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, M0            , N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Isend(&V(u, M0 + 1        , N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, M0 + M_loc + 1, N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Isend(&V(u, M0 + M_loc    , N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Irecv(&V(u, M0            , N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Isend(&V(u, M0 + 1        , N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Irecv(&V(u, M0 + M_loc + 1, N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
       MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
     }
 
   }
 
   // left and right sides of halo
+
   if (Q == 1) { 
     for (i = 0; i < M_loc+2; i++) {
       V(u, i, 0) = V(u, i, N_loc);
