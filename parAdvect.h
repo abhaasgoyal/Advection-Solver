@@ -14,7 +14,7 @@ void checkHaloSize(int w);
 
 // evolve advection over r timesteps, with (u,ldu) storing the local filed
 // may assume ldu = N_loc+2
-void parAdvect(int r, double *u, int ldu);
+void parAdvect(int r, double *u, int ldu, int comm_mode);
 
 // overlap communication variant; may assume ldu = N_loc+2
 void parAdvectOverlap(int r, double *u, int ldu);
