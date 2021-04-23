@@ -30,21 +30,20 @@ void initParParams(int M_, int N_, int P_, int Q_, int verb, int comm_mode_) {
   MPI_Comm_rank(comm, &rank);
   MPI_Comm_size(comm, &nprocs);
 
-  P0 = rank;
+  P0 = rank / Q;
   M0 = (M / P) * P0;
   M_loc = (P0 < P-1)? (M / P): (M - M0);
 
-  assert (Q == 1);
-  Q0 = 0;
-  N0 = 0;
-  N_loc = N;
+  Q0 = rank / P;
+  N0 = (N / Q) * Q0;
+  N_loc = (Q0 < Q-1)? (N / Q): (N - N0);
 } //initParParams()
 
 
 void checkHaloSize(int w) {
   if (w > M_loc || w > N_loc) {
     printf("%d: w=%d too large for %dx%d local field! Exiting...\n",
-	    rank, w, M_loc, N_loc);
+           rank, w, M_loc, N_loc);
     exit(1);
   }
 }
@@ -62,7 +61,7 @@ static void updateBoundary(double *u, int ldu) {
     }
   }
   else {
-    int topProc = (rank + 1) % nprocs, botProc = (rank - 1 + nprocs) % nprocs;
+    int topProc = (rank + Q) % nprocs, botProc = (rank - Q + nprocs) % nprocs;
     /* Send from all odd nodes first then send from all even nodes */
     if (comm_mode == 0) {
         if (rank % 2 == 0) {
@@ -99,6 +98,7 @@ static void updateBoundary(double *u, int ldu) {
       V(u, i, N_loc+1) = V(u, i, 1);
     }
   } else {
+    // Collect it
   }
 } //updateBoundary()
 
