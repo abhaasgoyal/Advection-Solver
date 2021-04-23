@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
   }
 
   initAdvectParams(M, N);  
-  initParParams(M, N, P, Q, verbosity);
+  initParParams(M, N, P, Q, verbosity, comm_mode);
   if (verbosity > 0)
     gatherParParams();
   checkHaloSize(w);

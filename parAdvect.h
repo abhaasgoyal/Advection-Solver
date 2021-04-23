@@ -7,7 +7,7 @@ extern int M0, N0;       // local field element (0,0) is global element (M0,N0)
 extern int P0, Q0;      // 2D process id (P0, Q0) in P x Q process grid 
 
 //sets up parallel parameters above
-void initParParams(int M, int N, int P, int Q, int verbosity);
+void initParParams(int M, int N, int P, int Q, int verbosity, int comm_mode_);
 
 //check halo size w is not too large for local M_loc x N_loc field
 void checkHaloSize(int w);

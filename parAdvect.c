@@ -34,9 +34,12 @@ void initParParams(int M_, int N_, int P_, int Q_, int verb, int comm_mode_) {
   M0 = (M / P) * P0;
   M_loc = (P0 < P-1)? (M / P): (M - M0);
 
-  Q0 = rank / P;
+  Q0 = rank % Q;
   N0 = (N / Q) * Q0;
+  // Put correct value for n_loc
   N_loc = (Q0 < Q-1)? (N / Q): (N - N0);
+  // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc%d\n", rank, P0, Q0, M0, N0, M_loc, N_loc);
+
 } //initParParams()
 
 
@@ -51,7 +54,6 @@ void checkHaloSize(int w) {
 
 static void updateBoundary(double *u, int ldu) {
   int i, j;
-
   //top and bottom halo
   //note: we get the left/right neighbour's corner elements from each end
   if (P == 1) {
@@ -64,6 +66,8 @@ static void updateBoundary(double *u, int ldu) {
     int botProc = (rank + Q) % nprocs, topProc = (rank - Q + nprocs) % nprocs; // Think of think as clockwise and anticlockwise
     /* Send from all odd nodes first then send from all even nodes */
     /* Only works till Q3 */
+    // printf("%d %d %d\n", rank, topProc, botProc);
+    // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n ", rank, P0, Q0, M0, N0, M_loc, N_loc);
     if (comm_mode == 0) {
         if (rank % 2 == 0) {
           MPI_Send(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm);
@@ -82,29 +86,45 @@ static void updateBoundary(double *u, int ldu) {
         }
     }
     else {
+      // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n", rank, P0, Q0, M0, N0, M_loc, N_loc);
       MPI_Request request[4]; int nReq = 0;
-      MPI_Isend(&V(u, M0 + M_loc    , N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, M0            , N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Isend(&V(u, M0 + 1        , N0 + 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, M0 + M_loc + 1, N0 + 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Isend(&V(u, M_loc    , 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Irecv(&V(u, 0        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Isend(&V(u, 1        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+      MPI_Irecv(&V(u, M_loc + 1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
       MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
     }
 
   }
-
   // left and right sides of halo
 
-  if (Q == 1) { 
+  if (Q == 1) {
+                //
+    // printf("jdfklsjf");
     for (i = 0; i < M_loc+2; i++) {
       V(u, i, 0) = V(u, i, N_loc);
       V(u, i, N_loc+1) = V(u, i, 1);
     }
   }
   else {
-    for (i = M0; i < M0 + M_loc + 2; i++) {
-      V(u, i, N0) = V(u, i, N0 + N_loc);
-      V(u, i, N0 + N_loc + 1) = V(u, i, N0 + 1);
+    int rightProc = (Q0 < Q - 1) ? (rank + 1) % nprocs : (rank - Q + 1 + nprocs) % nprocs;
+    int leftProc =  (Q0 > 0) ? (rank - 1 + nprocs) % nprocs : (rank + Q - 1);
+    printf("%d %d %d\n", rank, leftProc, rightProc);
+    printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n ", rank, P0, Q0, M0, N0, M_loc, N_loc);
+    MPI_Request request[4]; int nReq = 0;
+    if (rank == 0) {
+      int temp = sizeof(*u)/ sizeof(double);
+      printf("%d\n", temp);
     }
+
+    MPI_Datatype s_coltype;
+    MPI_Type_vector(M_loc + 2, 1, N + 2, MPI_DOUBLE, &s_coltype);
+    MPI_Type_commit(&s_coltype);
+    MPI_Isend(&V(u, 0, N_loc     ), 1, s_coltype, leftProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, 0, 0         ), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Isend(&V(u, 0, 1         ), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, 0, N_loc +  1), 1, s_coltype, leftProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
   }
 } //updateBoundary()
 
@@ -117,7 +137,13 @@ void parAdvect(int reps, double *u, int ldu) {
   assert(ldu == N_loc + 2);
   
   for (r = 0; r < reps; r++) {
+    // printf("%d %d %d %d %d %d %d\n", M_loc, N_loc, ldu, ldv, M0, N0, rank);
+    //printf("%d %d\n", M0, N0);
     updateBoundary(u, ldu);
+    // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc%d\n", rank, P0, Q0, M0, N0, M_loc, N_loc);
+    // printf("%d %d %d %d %d %d %d\n", M_loc, N_loc, ldu, ldv, M0, N0, rank);
+    // We got :- M_loc, N_loc, M0 + 1, N0 + 1 as proper initial points and lengths of the arr
+    // To distribute
     updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
     copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
 
