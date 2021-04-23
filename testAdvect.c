@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
   else if (optX)
     parAdvectExtra(r, u, ldu);
   else
-    parAdvect(r, u, ldu, comm_mode);
+    parAdvect(r, u, ldu);
   MPI_Barrier(MPI_COMM_WORLD);
   t = MPI_Wtime() - t;
   if (rank == 0) {

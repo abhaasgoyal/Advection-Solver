@@ -19,10 +19,12 @@ static int M, N, P, Q; // local store of problem parameters
 static int verbosity;
 static int rank, nprocs;       // MPI values
 static MPI_Comm comm;
+static int comm_mode;
 
 //sets up parallel parameters above
-void initParParams(int M_, int N_, int P_, int Q_, int verb) {
+void initParParams(int M_, int N_, int P_, int Q_, int verb, int comm_mode_) {
   M = M_, N = N_; P = P_, Q = Q_;
+  comm_mode = comm_mode_;
   verbosity = verb;
   comm = MPI_COMM_WORLD;
   MPI_Comm_rank(comm, &rank);
@@ -48,7 +50,7 @@ void checkHaloSize(int w) {
 }
 
 
-static void updateBoundary(double *u, int ldu, int comm_mode) {
+static void updateBoundary(double *u, int ldu) {
   int i, j;
 
   //top and bottom halo
@@ -102,14 +104,14 @@ static void updateBoundary(double *u, int ldu, int comm_mode) {
 
 
 // evolve advection over r timesteps, with (u,ldu) containing the local field
-void parAdvect(int reps, double *u, int ldu, int comm_mode) {
+void parAdvect(int reps, double *u, int ldu) {
   int r; 
   double *v; int ldv = N_loc+2;
   v = calloc(ldv*(M_loc+2), sizeof(double)); assert(v != NULL);
   assert(ldu == N_loc + 2);
   
   for (r = 0; r < reps; r++) {
-    updateBoundary(u, ldu, comm_mode);
+    updateBoundary(u, ldu);
     updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
     copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
 
