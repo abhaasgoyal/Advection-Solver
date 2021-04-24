@@ -64,6 +64,7 @@ static void updateBoundary(double *u, int ldu) {
   int i, j;
   //top and bottom halo
   //note: we get the left/right neighbour's corner elements from each end
+   printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n", rank, P0, Q0, M0, N0, M_loc, N_loc);
   if (P == 1) {
     for (j = 1; j < N_loc+1; j++) {
       V(u, 0, j) = V(u, M_loc, j);
@@ -76,6 +77,7 @@ static void updateBoundary(double *u, int ldu) {
     /* Only works till Q3 */
     // printf("%d %d %d\n", rank, topProc, botProc);
     // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n ", rank, P0, Q0, M0, N0, M_loc, N_loc);
+    /*
     if (comm_mode == 0) {
         if (rank % 2 == 0) {
           MPI_Send(&V(u, M_loc, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm);
@@ -94,14 +96,15 @@ static void updateBoundary(double *u, int ldu) {
         }
     }
     else {
-      // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n", rank, P0, Q0, M0, N0, M_loc, N_loc);
-      MPI_Request request[4]; int nReq = 0;
-      MPI_Isend(&V(u, M_loc    , 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, 0        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Isend(&V(u, 1        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Irecv(&V(u, M_loc + 1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
-      MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
-    }
+    */
+
+    MPI_Request request[4]; int nReq = 0;
+    MPI_Isend(&V(u, M_loc    , 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, 0        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Isend(&V(u, 1        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, M_loc + 1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
+    // }
 
   }
   // left and right sides of halo
@@ -117,8 +120,7 @@ static void updateBoundary(double *u, int ldu) {
   else {
     int rightProc = (Q0 < Q - 1) ? (rank + 1) % nprocs : (rank - Q + 1 + nprocs) % nprocs;
     int leftProc =  (Q0 > 0) ? (rank - 1 + nprocs) % nprocs : (rank + Q - 1);
-    // printf("%d %d %d\n", rank, leftProc, rightProc);
-    // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n ", rank, P0, Q0, M0, N0, M_loc, N_loc);
+    printf("LR %d %d %d\n", rank, leftProc, rightProc);
     MPI_Request request[4]; int nReq = 0;
     MPI_Datatype s_coltype;
     MPI_Type_vector(M_loc + 2, 1, N_loc + 2, MPI_DOUBLE, &s_coltype);
@@ -162,7 +164,23 @@ void parAdvectOverlap(int reps, double *u, int ldu) {
 
 // wide halo variant
 void parAdvectWide(int reps, int w, double *u, int ldu) {
+  int r;
+  double *v; int ldv = N_loc+2;
+  v = calloc(ldv*(M_loc+2), sizeof(double)); assert(v != NULL);
+  assert(ldu == N_loc + 2);
 
+  for (r = 0; r < reps; r++) {
+    updateBoundary(u, ldu);
+    updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
+    copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
+
+    if (verbosity > 2) {
+      char s[64]; sprintf(s, "%d reps: u", r+1);
+      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
+    }
+  }
+
+  free(v);
 } //parAdvectWide()
 
 
