@@ -20,6 +20,7 @@ static int verbosity;
 static int rank, nprocs;       // MPI values
 static MPI_Comm comm;
 static int comm_mode;
+static int halo_error = 0;
 
 //sets up parallel parameters above
 void initParParams(int M_, int N_, int P_, int Q_, int verb, int comm_mode_) {
@@ -45,9 +46,16 @@ void initParParams(int M_, int N_, int P_, int Q_, int verb, int comm_mode_) {
 
 void checkHaloSize(int w) {
   if (w > M_loc || w > N_loc) {
-    printf("%d: w=%d too large for %dx%d local field! Exiting...\n",
-           rank, w, M_loc, N_loc);
-    exit(1);
+    halo_error = 1;
+    MPI_Bcast(&halo_error, 1, MPI_INT, rank, comm);
+  }
+  if (halo_error == 1) {
+    if (rank == 0) {
+      printf("%d: w=%d too large for %dx%d local field! Exiting...\n",
+             rank, w, M_loc, N_loc);
+    }
+    MPI_Finalize();
+    exit(0);
   }
 }
 
@@ -109,16 +117,11 @@ static void updateBoundary(double *u, int ldu) {
   else {
     int rightProc = (Q0 < Q - 1) ? (rank + 1) % nprocs : (rank - Q + 1 + nprocs) % nprocs;
     int leftProc =  (Q0 > 0) ? (rank - 1 + nprocs) % nprocs : (rank + Q - 1);
-    printf("%d %d %d\n", rank, leftProc, rightProc);
-    printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n ", rank, P0, Q0, M0, N0, M_loc, N_loc);
+    // printf("%d %d %d\n", rank, leftProc, rightProc);
+    // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc = %d\n ", rank, P0, Q0, M0, N0, M_loc, N_loc);
     MPI_Request request[4]; int nReq = 0;
-    if (rank == 0) {
-      int temp = sizeof(*u)/ sizeof(double);
-      printf("%d\n", temp);
-    }
-
     MPI_Datatype s_coltype;
-    MPI_Type_vector(M_loc + 2, 1, N + 2, MPI_DOUBLE, &s_coltype);
+    MPI_Type_vector(M_loc + 2, 1, N_loc + 2, MPI_DOUBLE, &s_coltype);
     MPI_Type_commit(&s_coltype);
     MPI_Isend(&V(u, 0, N_loc     ), 1, s_coltype, leftProc, HALO_TAG, comm, &request[nReq++]);
     MPI_Irecv(&V(u, 0, 0         ), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]);
@@ -137,13 +140,7 @@ void parAdvect(int reps, double *u, int ldu) {
   assert(ldu == N_loc + 2);
   
   for (r = 0; r < reps; r++) {
-    // printf("%d %d %d %d %d %d %d\n", M_loc, N_loc, ldu, ldv, M0, N0, rank);
-    //printf("%d %d\n", M0, N0);
     updateBoundary(u, ldu);
-    // printf("Rank: %d - P0=%d Q0=%d M0=%d N0=%d M_loc=%d N_loc%d\n", rank, P0, Q0, M0, N0, M_loc, N_loc);
-    // printf("%d %d %d %d %d %d %d\n", M_loc, N_loc, ldu, ldv, M0, N0, rank);
-    // We got :- M_loc, N_loc, M0 + 1, N0 + 1 as proper initial points and lengths of the arr
-    // To distribute
     updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
     copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
 
