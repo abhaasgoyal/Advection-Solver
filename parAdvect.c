@@ -108,7 +108,7 @@ static void updateBoundary(double *u, int ldu) {
 
   }
   // left and right sides of halo
-
+    // char s[64];
   if (Q == 1) {
                 //
     // printf("jdfklsjf");
@@ -120,18 +120,31 @@ static void updateBoundary(double *u, int ldu) {
   else {
     int rightProc = (Q0 < Q - 1) ? (rank + 1) % nprocs : (rank - Q + 1 + nprocs) % nprocs;
     int leftProc =  (Q0 > 0) ? (rank - 1 + nprocs) % nprocs : (rank + Q - 1);
-    printf("LR %d %d %d\n", rank, leftProc, rightProc);
+    // printf("LR %d %d %d\n", rank, leftProc, rightProc);
     MPI_Request request[4]; int nReq = 0;
     MPI_Datatype s_coltype;
     MPI_Type_vector(M_loc + 2, 1, N_loc + 2, MPI_DOUBLE, &s_coltype);
     MPI_Type_commit(&s_coltype);
-    MPI_Isend(&V(u, 0, N_loc     ), 1, s_coltype, leftProc, HALO_TAG, comm, &request[nReq++]);
-    MPI_Irecv(&V(u, 0, 0         ), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]);
-    MPI_Isend(&V(u, 0, 1         ), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]);
-    MPI_Irecv(&V(u, 0, N_loc +  1), 1, s_coltype, leftProc, HALO_TAG, comm, &request[nReq++]);
+    /* if (verbosity > 2) { */
+    /*   char s[64]; printf("%d: Before transfer", rank); */
+    /*   printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu); */
+    /* } */
+
+    /* printf("Before transfer"); */
+    /* printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu); */
+    MPI_Isend(&V(u, 0, N_loc     ), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, 0, 0         ), 1, s_coltype, leftProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Isend(&V(u, 0, 1         ), 1, s_coltype, leftProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, 0, N_loc +  1), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]);
     MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
+    /* if (verbosity > 2) { */
+    /*   char s[64]; printf("%d: After transfer", rank); */
+    /*   printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu); */
+    /* } */
   }
-} //updateBoundary()
+    /* printf("Before transfer"); */
+    /* printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu); */
+} //updateBoundary() // NOT working when Q/P /= 4 or 2
 
 
 // evolve advection over r timesteps, with (u,ldu) containing the local field
@@ -146,10 +159,10 @@ void parAdvect(int reps, double *u, int ldu) {
     updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
     copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
 
-    if (verbosity > 2) {
-      char s[64]; sprintf(s, "%d reps: u", r+1);
-      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
-    }
+    /* if (verbosity > 2) { */
+    /*   char s[64]; sprintf(s, "%d reps: u", r+1); */
+    /*   printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu); */
+    /* } */
   }
  
   free(v);
