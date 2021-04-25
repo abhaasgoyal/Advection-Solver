@@ -181,14 +181,11 @@ static void updateBoundaryO(double *u, int ldu, MPI_Request* request) {
   }
   else {
     int botProc = (rank + Q) % nprocs, topProc = (rank - Q + nprocs) % nprocs; // Think of think as clockwise and anticlockwise
-    MPI_Datatype s_rowtype;
-    MPI_Type_vector(1, N_loc - 2, 2, MPI_DOUBLE, &s_rowtype); // Number of rows being transmitted are w with N_loc elements
-    MPI_Type_commit(&s_rowtype);
 
-    MPI_Isend(&V(u, M_loc    , 1), 1, s_rowtype, botProc, HALO_TAG, comm, &request[nReq++]);
-    MPI_Irecv(&V(u, 0        , 1), 1, s_rowtype, topProc, HALO_TAG, comm, &request[nReq++]);
-    MPI_Isend(&V(u, 1        , 1), 1, s_rowtype, topProc, HALO_TAG, comm, &request[nReq++]);
-    MPI_Irecv(&V(u, M_loc + 1, 1), 1, s_rowtype, botProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Isend(&V(u, M_loc    , 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, 0        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Isend(&V(u, 1        , 1), N_loc, MPI_DOUBLE, topProc, HALO_TAG, comm, &request[nReq++]);
+    MPI_Irecv(&V(u, M_loc + 1, 1), N_loc, MPI_DOUBLE, botProc, HALO_TAG, comm, &request[nReq++]);
 
     MPI_Datatype s_corner_type;
     MPI_Type_vector(2, 1, N_loc + 1, MPI_DOUBLE, &s_corner_type);
@@ -276,14 +273,24 @@ void parAdvectWide(int reps, int w, double *u, int ldu) {
   double *v; int ldv = N_loc+2;
   v = calloc(ldv*(M_loc+2), sizeof(double)); assert(v != NULL);
   assert(ldu == N_loc + 2*w);
-  // For now assume r % w == 0?
-  for (r = 0; r + w < reps; r = r + w) {
+  for (r = 0; r < reps / w; r++) {
     updateBoundary(u, ldu, w);
     // The sequential part :/
     for (w_i = 0; w_i < w; w_i++) {
       updateAdvectField(M_loc, N_loc, &V(u,w,w), ldu, &V(v,w,w), ldv);
     }
     copyField(M_loc, N_loc, &V(v,w,w), ldv, &V(u,w,w), ldu);
+
+    if (verbosity > 2) {
+      char s[64]; sprintf(s, "%d reps: u", r+1);
+      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
+    }
+  }
+  // Where width > repetitions left
+  for (r = 0; r < reps % w; r++) {
+    updateBoundary(u, ldu, 1);
+    updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
+    copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
 
     if (verbosity > 2) {
       char s[64]; sprintf(s, "%d reps: u", r+1);
