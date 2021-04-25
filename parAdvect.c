@@ -63,7 +63,7 @@ void checkHaloSize(int w) {
 }
 
 
-static void updateBoundary(double *u, int ldu, int w, MPI_Request* request) {
+static void updateBoundary(double *u, int ldu, int w) {
   int i, j;
   //top and bottom halo
   //note: we get the left/right neighbour's corner elements from each end
@@ -100,6 +100,7 @@ static void updateBoundary(double *u, int ldu, int w, MPI_Request* request) {
     else {
     */
     MPI_Datatype s_rowtype; int nReq = 0;
+    MPI_Request request[4];
     MPI_Type_vector(w, N_loc, N_loc + 2*w, MPI_DOUBLE, &s_rowtype); // Number of rows being transmitted are w with N_loc elements
     MPI_Type_commit(&s_rowtype);
     MPI_Isend(&V(u, M_loc    , w), 1, s_rowtype, botProc, HALO_TAG, comm, &request[nReq++]);
@@ -123,8 +124,8 @@ static void updateBoundary(double *u, int ldu, int w, MPI_Request* request) {
     int rightProc = (Q0 < Q - 1) ? (rank + 1) % nprocs : (rank - Q + 1 + nprocs) % nprocs;
     int leftProc =  (Q0 > 0) ? (rank - 1 + nprocs) % nprocs : (rank + Q - 1);
     // printf("LR %d %d %d\n", rank, leftProc, rightProc);
-    int nReq = 0;
-    MPI_Datatype s_coltype;
+    MPI_Datatype s_coltype; int nReq = 0;
+    MPI_Request request[4];
     MPI_Type_vector(M_loc + 2*w, w, N_loc + 2*w, MPI_DOUBLE, &s_coltype); // Count of each element i
     MPI_Type_commit(&s_coltype);
     /* if (verbosity > 2) { */
@@ -151,10 +152,9 @@ void parAdvect(int reps, double *u, int ldu) {
   double *v; int ldv = N_loc+2;
   v = calloc(ldv*(M_loc+2), sizeof(double)); assert(v != NULL);
   assert(ldu == N_loc + 2);
-  MPI_Request request[4];
   for (r = 0; r < reps; r++) {
     // static void updateBoundary(double *u, int ldu, int w, int o, MPI_Request* request) {
-    updateBoundary(u, ldu, 1, request);
+    updateBoundary(u, ldu, 1);
     updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
     copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
 
@@ -172,6 +172,7 @@ static void updateBoundaryO(double *u, int ldu, MPI_Request* request) {
   int i, j, nReq = 0;
   //top and bottom halo
   //note: we get the left/right neighbour's corner elements from each end
+  // printf("%d: %d %d\n", rank, P, Q);
   if (P == 1) {
     for (j = 1; j < N_loc+1; j++) {
       V(u, 0, j) = V(u, M_loc, j);
@@ -181,7 +182,7 @@ static void updateBoundaryO(double *u, int ldu, MPI_Request* request) {
   else {
     int botProc = (rank + Q) % nprocs, topProc = (rank - Q + nprocs) % nprocs; // Think of think as clockwise and anticlockwise
     MPI_Datatype s_rowtype;
-    MPI_Type_vector(1, N_loc - 2, N_loc + 2, MPI_DOUBLE, &s_rowtype); // Number of rows being transmitted are w with N_loc elements
+    MPI_Type_vector(1, N_loc - 2, 2, MPI_DOUBLE, &s_rowtype); // Number of rows being transmitted are w with N_loc elements
     MPI_Type_commit(&s_rowtype);
 
     MPI_Isend(&V(u, M_loc    , 1), 1, s_rowtype, botProc, HALO_TAG, comm, &request[nReq++]);
@@ -191,16 +192,16 @@ static void updateBoundaryO(double *u, int ldu, MPI_Request* request) {
 
     MPI_Datatype s_corner_type;
     MPI_Type_vector(2, 1, N_loc + 1, MPI_DOUBLE, &s_corner_type);
+    MPI_Type_commit(&s_corner_type);
     MPI_Request corner_elem[4]; int n_cor = 0; // Wait flag only for the corner elements
-    MPI_Isend(&V(u, M_loc    , 1), 1, MPI_DOUBLE, botProc, HALO_TAG, comm, &corner_elem[n_cor++]);
-    MPI_Irecv(&V(u, 0        , 1), 1, MPI_DOUBLE, topProc, HALO_TAG, comm, &corner_elem[n_cor++]);
-    MPI_Isend(&V(u, 1        , 1), 1, MPI_DOUBLE, topProc, HALO_TAG, comm, &corner_elem[n_cor++]);
-    MPI_Irecv(&V(u, M_loc + 1, 1), 1, MPI_DOUBLE, botProc, HALO_TAG, comm, &corner_elem[n_cor++]);
+    MPI_Isend(&V(u, M_loc    , 1), 1, s_corner_type, botProc, HALO_TAG, comm, &corner_elem[n_cor++]);
+    MPI_Irecv(&V(u, 0        , 1), 1, s_corner_type, topProc, HALO_TAG, comm, &corner_elem[n_cor++]);
+    MPI_Isend(&V(u, 1        , 1), 1, s_corner_type, topProc, HALO_TAG, comm, &corner_elem[n_cor++]);
+    MPI_Irecv(&V(u, M_loc + 1, 1), 1, s_corner_type, botProc, HALO_TAG, comm, &corner_elem[n_cor++]);
     MPI_Waitall(n_cor, corner_elem, MPI_STATUS_IGNORE);
   }
   // left and right sides of halo
   if (Q == 1) {
-
     for (i = 0; i < M_loc+2; i++) {
       V(u, i, 0) = V(u, i, N_loc);
       V(u, i, N_loc+1) = V(u, i, 1);
@@ -239,30 +240,26 @@ void parAdvectOverlap(int reps, double *u, int ldu) {
   int r;
   int n_requests = ((P == 1) ? 0 : 4) + ((Q == 1) ? 0 : 4);
   double *v; int ldv = N_loc+2;
-  MPI_Request request[n_requests]; // Danger of allocating a 0,0 array if P=Q=1
   v = calloc(ldv*(M_loc+2), sizeof(double)); assert(v != NULL);
   assert(ldu == N_loc + 2);
-
-  // set overlap = 1;
+  MPI_Request request[n_requests];
   for (r = 0; r < reps; r++) {
-    // MPI Isend all boundary rows and columns instead of updateBoundary()
-    updateBoundaryO(u, ldu, request); // Here o == 1 so no waiting till next command
-    // MPI Receive all boundary rows and columns needed
-    MPI_Waitall(n_requests, request, MPI_STATUSES_IGNORE);
-    // Custom range of update advect field and copy (green field)
+    // static void updateBoundary(double *u, int ldu, int w, int o, MPI_Request* request) {
+    updateBoundaryO(u, ldu, request);
+
+    // updateAdvectField(M_loc, N_loc, &V(u,1,1), ldu, &V(v,1,1), ldv);
+    // Send inner halo
     updateAdvectField(M_loc - 1, N_loc - 1, &V(u,2,2), ldu, &V(v,2,2), ldv); // Start from (2,2) and end earlier in (M_loc - 1, N_loc -1)
-    // copy them by hand
+    if (verbosity > 1) {
+      char s[64]; sprintf(s, "%d reps: u", r+1);
+      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
+    }    MPI_Waitall(n_requests, request, MPI_STATUSES_IGNORE);
+    // Update edges manually
     updateAdvectField(1    , N_loc, &V(u,1,1)        , ldu, &V(v,1,1)          , ldv);
     updateAdvectField(1    , N_loc, &V(u,M_loc,1)    , ldu, &V(v,M_loc,1)      , ldv);
-    // Checking the risk of updating corner elem twice but stored in diff vector v so it should be ok I guess
     updateAdvectField(M_loc, 1    , &V(u,1,1)        , ldu, &V(v,1,1)          , ldv);
     updateAdvectField(M_loc, 1    , &V(u,1,N_loc)    , ldu, &V(v,1,N_loc)      , ldv);
-
-    // MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
-
-    // Finally copy the correct array for the next step
-    copyField(M_loc, N_loc, &V(v,2,2), ldv, &V(u,2,2), ldu);
-
+    copyField(M_loc, N_loc, &V(v,1,1), ldv, &V(u,1,1), ldu);
     if (verbosity > 2) {
       char s[64]; sprintf(s, "%d reps: u", r+1);
       printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
@@ -279,9 +276,9 @@ void parAdvectWide(int reps, int w, double *u, int ldu) {
   double *v; int ldv = N_loc+2;
   v = calloc(ldv*(M_loc+2), sizeof(double)); assert(v != NULL);
   assert(ldu == N_loc + 2*w);
-  MPI_Request request[4];
-  for (r = 0; r < reps; r++) {
-    updateBoundary(u, ldu, w, request);
+  // For now assume r % w == 0?
+  for (r = 0; r + w < reps; r = r + w) {
+    updateBoundary(u, ldu, w);
     // The sequential part :/
     for (w_i = 0; w_i < w; w_i++) {
       updateAdvectField(M_loc, N_loc, &V(u,w,w), ldu, &V(v,w,w), ldv);
