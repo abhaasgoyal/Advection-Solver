@@ -10,7 +10,7 @@ extern int P0, Q0;      // 2D process id (P0, Q0) in P x Q process grid
 void initParParams(int M, int N, int P, int Q, int verbosity, int comm_mode_, int o);
 
 //check halo size w is not too large for local M_loc x N_loc field
-void checkHaloSize(int w);
+int checkHaloSize(int w);
 
 // evolve advection over r timesteps, with (u,ldu) storing the local filed
 // may assume ldu = N_loc+2

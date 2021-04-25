@@ -181,7 +181,13 @@ int main(int argc, char** argv) {
   initParParams(M, N, P, Q, verbosity, comm_mode, optO);
   if (verbosity > 0)
     gatherParParams();
-  checkHaloSize(w);
+
+  int halo_size_flag = checkHaloSize(w);
+  if (halo_size_flag == -1) {
+    printf("Why then");
+    MPI_Finalize();
+    return 0;
+  }
 
   ldu = N_loc+2*w;
   u = calloc(ldu*(M_loc+2*w), sizeof(double)); assert (u != NULL);

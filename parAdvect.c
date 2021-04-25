@@ -47,19 +47,21 @@ void initParParams(int M_, int N_, int P_, int Q_, int verb, int comm_mode_, int
 } //initParParams()
 
 
-void checkHaloSize(int w) {
-  if (w > M_loc || w > N_loc) {
-    halo_error = 1;
-    MPI_Bcast(&halo_error, 1, MPI_INT, rank, comm);
+int checkHaloSize(int w) {
+  if (rank == 0) {
+    if (w > M_loc || w > N_loc) {
+      halo_error = 1;
+    }
   }
+  MPI_Bcast(&halo_error, 1, MPI_INT, 0, MPI_COMM_WORLD);
   if (halo_error == 1) {
     if (rank == 0) {
       printf("%d: w=%d too large for %dx%d local field! Exiting...\n",
              rank, w, M_loc, N_loc);
     }
-    MPI_Finalize();
-    exit(0);
+    return -1;
   }
+  return 0;
 }
 
 
@@ -100,8 +102,7 @@ static void updateBoundary(double *u, int ldu, int w) {
     else {
     */
     if (verbosity > 1) {
-      char s[64]; printf("%d: Before UB transfer\n", rank);
-      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
+      printAdvectField(rank, "Before UB transfer\n", M_loc+2*w, N_loc+2*w, u, ldu);
     }
 
     MPI_Datatype s_rowtype; int nReq = 0;
@@ -115,8 +116,7 @@ static void updateBoundary(double *u, int ldu, int w) {
     MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
     // }
     if (verbosity > 1) {
-      char s[64]; printf("%d: After UB transfer\n", rank);
-      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
+      printAdvectField(rank, "After UB transfer\n", M_loc+2*w, N_loc+2*w, u, ldu);
     }
 
   }
@@ -139,7 +139,7 @@ static void updateBoundary(double *u, int ldu, int w) {
     MPI_Type_commit(&s_coltype);
     if (verbosity > 1) {
       char s[64]; printf("%d: Before LR transfer\n", rank);
-      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
+      printAdvectField(rank, s, M_loc+2*w, N_loc+2*w, u, ldu);
     }
 
     MPI_Isend(&V(u, 0, N_loc    ), 1, s_coltype, rightProc, HALO_TAG, comm, &request[nReq++]); // w + N_loc - w
@@ -149,7 +149,7 @@ static void updateBoundary(double *u, int ldu, int w) {
     MPI_Waitall(nReq, request, MPI_STATUSES_IGNORE);
     if (verbosity > 1) {
       char s[64]; printf("%d: After LR transfer\n", rank);
-      printAdvectField(rank, s, M_loc+2, N_loc+2, u, ldu);
+      printAdvectField(rank, s, M_loc+2*w, N_loc+2*w, u, ldu);
     }
   }
 } //updateBoundary()
@@ -280,7 +280,7 @@ void parAdvectOverlap(int reps, double *u, int ldu) {
 void parAdvectWide(int reps, int w, double *u, int ldu) {
   int r, w_i;
   double *v; int ldv = N_loc+2;
-  v = calloc(ldv*(M_loc+2), sizeof(double)); assert(v != NULL);
+  v = calloc(ldv*(M_loc+2*w), sizeof(double)); assert(v != NULL);
   assert(ldu == N_loc + 2*w);
    // reps = r * w
   for (r = 0; r < reps / w; r++) {

@@ -11,7 +11,7 @@ e=# echo
 r=100
 M=10000 # may need to make bigger
 N=$M
-opts="-i -P 16" # "-o"
+opts="-i -o -P 16" # "-o"
 ps="48 96 192"
 
 module load openmpi
