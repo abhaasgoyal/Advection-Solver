@@ -74,13 +74,13 @@ static void updateBoundary(double *u, int ldu, int w) {
     }
 
     for (w_i = 0; w_i < w; w_i++) {
-      for (j = 1; j < N_loc+1; j++) {
+      for (j = w; j < N_loc+w; j++) {
         V(u, w_i, j) = V(u, M_loc + w_i, j);
         V(u, w + M_loc + w_i, j) = V(u, w + w_i, j);
       }
     }
     if (verbosity > 1) {
-      printAdvectField(rank, "Before UB transfer", M_loc+2*w, N_loc+2*w, u, ldu);
+      printAdvectField(rank, "After UB transfer", M_loc+2*w, N_loc+2*w, u, ldu);
     }
   }
   else {
@@ -133,7 +133,7 @@ static void updateBoundary(double *u, int ldu, int w) {
   if (Q == 1) {
 
     for (w_i = 0; w_i < w; w_i++) {
-      for (i = 0; i < M_loc+2; i++) {
+      for (i = 0; i < M_loc+2*w; i++) {
         V(u, i, w_i) = V(u, i, N_loc + w_i);
         V(u, i, w + N_loc + w_i) = V(u, i, w + w_i);
       }
