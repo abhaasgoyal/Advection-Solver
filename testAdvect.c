@@ -184,7 +184,6 @@ int main(int argc, char** argv) {
 
   int halo_size_flag = checkHaloSize(w);
   if (halo_size_flag == -1) {
-    printf("Why then");
     MPI_Finalize();
     return 0;
   }
