@@ -17,7 +17,7 @@
 |----------+----------------------|
 
 * Deadlock issues
-The prototype function ~parAdvect()~ can fail for total buffer length > 2^15 because there are 2 ~MPI_Send~ happening at the same time. When buffer length is small then the send is locally blocking (so it copies the message into the local buffer). But for larger value of total buffer length it becomes globally blocking (so both the messages now are stuck in the first ~MPI_Send~ waiting for the other process to receive). Hence, we face a deadlock situation here.
+The prototype function ~parAdvect()~ can fail for total buffer length > 2^15 because ~MPI_Send~ is being called for 2 or more processes at the same time. When buffer length is small then the send is locally blocking (so it copies the message into the local buffer). But for larger value of total buffer length it becomes globally blocking (so both the messages now are stuck in the first ~MPI_Send~ waiting for the other process to receive). Hence, we face a deadlock situation here.
 
 The simplest solution is to divide up the ranks into even and odd, and switch up the sending and receiving these classes.
 #+CAPTION: Splitting and switching receiving and sending for odd and even ranks
@@ -108,10 +108,10 @@ Now it seems to be safely working for large values of M and N.
 ** Determination of base values
 - We need to do strong scaling in one node of dual socket, 24 core Intel Platinum Xeon 8274
 - *FLOPS* = nodes * sockets * cores * ops * clock time \\
-        = 1 * 2 * 24 * 8 * 3.2 (GHz) \\
-        = 1.228e+09F
+        = 1 * 2 * 24 * 24 * 3.2 (GHz) \\
+        = 3.684e+09F
 - *t_f* = 1/FLOPS
-        = 8.19e-10s
+        = 2.73e-10s
 - *t_w* is calculated by sending a pong message of ~double~ type values of length 1024 bytes 100 times and taking the average time. It was found to be 5.67e-06s
 - *t_s* (which is related to latency) is calculated by sending a single byte in the pong program (inspired from Lab 01) and dividing the result by 2
   It is calculated to be 1.8/2 => 9e-07s
@@ -187,6 +187,7 @@ Now it seems to be safely working for large values of M and N.
 - Block communication > Strip communication if
     #+begin_export latex
     \begin{align*}
+    T_{top\_bot\_block}  + T_{left\_right\_block} &> T_{top\_bot\_strip} + T_{left\_right\_strip} \\
     8t_s + (\frac{M}{P} + \frac{N}{Q})t_w &> 3(t_s + N. t_w) + 2 \frac{M}{P} t_f \\
       t_s &> \frac{3}{8} ((N - (\frac{M}{P} + \frac{N}{Q}))t_w + 2 \frac{M}{P}t_f)
         \end{align*}
@@ -259,7 +260,7 @@ Now it seems to be safely working for large values of M and N.
   #+end_export
   In the best case scenario (the 4 is to highlight the 4 corners that I have sent before sending the messages left and right)
 ** Results
-~M = 192 N = 100000 reps = 100~
+~M = 100000 N = NP reps = 100~
 #+CAPTION: Performance comparision between normal and overlapping communication(4 Nodes)
 |------+-----------+----------+----------+------------+----------+----------+-----------|
 | *NP* | *A_T*     |    *G_F* |    *P_C* | *A_T (-o)* |    *G_F* |    *P_C* | *Speedup* |
@@ -366,25 +367,28 @@ Now it seems to be safely working for large values of M and N.
 
 * Tiled Stencil Technique
 
-While the processing power of CPUs have been consistently growing, the actual performance of computation is often bottlenecked by the speed at which the processor can access data from the memory. This is a potential problem that we have been facing since the last question. The main factors [1]
+While the processing power of CPUs in stencil computations have been consistently growing, the actual performance of computation is often bottlenecked by the speed at which the processor can access data from the memory[1]. This is a potential problem that we have been facing since the last question. The main goal is that we need to achieve rearranging and grouping the order of execution (or iteration space) while preserving the information flow we need to achieve 2 conclusions:
+1. Not violating any sort data dependencies
+2. Increasing the segment of data in cache which is needed
 
 The main goal of tiling transformation can be used to improve locality of data, and hence improving cache performance by a huge margin. In our advection solver (where a 9 point stencil has been used) the distance to be traveled between the central to bottom right corner is N_loc + 2 * w + 1. Hence as w increases, the probability of the next element in the same cache decreases.
 
-For eg, a very similar problem of 2D Jacobi[ 9 point stencil uses a form of tiling called Hierarchical Overlapped tiling[2].It's goal is to adapt to the memory hierarchy of the target machine.
+Recent work have shown promise to use modified forms of overlapped tiling to achieve this goal. For eg, a very similar problem of 2D Jacobi, whose 9 point stencil form uses Hierarchical Overlapped tiling[2].It's goal is to adapt to the memory hierarchy of the target machine. It mentions that tiling techniques could improve reuse, with array padding.
 
-The papers mention that tiling techniques could improve reuse, with array padding. By rearranging and grouping the order of execution (or iteration space) while preserving the information flow we need to achieve 2 oals
-1. Not violating data dependency
-2. Increasing the segment of data in cache which is needed
+Selecting Tile sizes and the process of determining the abstract tiles is even more useful in higher dimension stencils (such as 3D Jacobi iterations) with results in very low cost functions to calculate. It's transformation is reference in [3] with the following code and illustrations (Figure 4 and 7 of [3]):
 
-Selecting Tile sizes and the process of determining the abstract tiles is reference in [2] with the following code:
-
+#+caption: Simplified Stencil code
 #+begin_src
-// Simplified Stencil Code
-do T = 1,time
-    do J=2,N-1
-        do I=2,N-1
-            A(I,J) = B(I-1,J)+...
+A(N,N,N), B(N,N,N)
+    do K=2,N-1
+        do J=2,N-1
+            do I=2,N-1
+                A(I,J,K) = C*(B(I-1,J,K)+B(I+1,J,K)+
+                           B(I,J-1,K)+B(I,J+1,K)+
+                           B(I,J,K-1)+B(I,J,K+1))
 #+end_src
+
+#+caption: Tiled Stencil code for 3D Jacobi iterations
 #+begin_src
 do JJ=2,N-1,TJ
     do II=2,N-1,TI
@@ -395,8 +399,23 @@ do JJ=2,N-1,TJ
                                B(I,J-1,K)+B(I,J+1,K) +
                                B(I,J,K-1)+B(I,J,K+1))
 #+end_src
+\clearpage
+
+  #+BEGIN_EXPORT latex
+\begin{figure}[!htb]
+\minipage{0.45\textwidth}
+  \includegraphics[width=\linewidth, trim={0cm 0cm 0cm 1cm}, clip]{Model.pdf}
+  \caption{Access pattern of normal 3D Jacobi}\label{fig:Model}
+\endminipage\hfill
+\minipage{0.45\textwidth}%
+  \includegraphics[width=\linewidth,trim={0cm 0cm 0cm 0.55cm}, clip]{Spiral.pdf}
+  \caption{Access Pattern of Tiled 3D Jacobi}\label{fig:Spiral}
+\endminipage
+\end{figure}
+  #+END_EXPORT
+
 * Combination of Wide halo and stencil technique
-A combination of these might alleviate the ~O(w(M+N))~ extra computations to a certain extent by having good cache coherency. I would hypothesize that it would work for small values of w.
+A combination of these might alleviate the ~O(w(M+N))~ extra computations to a certain extent by having good cache coherency. I would hypothesize that it would work for small values of w since it has a space complexity of ~O((w + M)(w + N))~ thus the memory performance would be detrimented as w increases.
 
 * Extra optimizations
 - A potential optimization was seen when I saw an opportunity to explore Q5 further to work with values of Q > 1. For that, I also referenced my doubts and got it clarified on Piazza ([[https://piazza.com/class/kkeyidkqw3h21i?cid=104][link]]).
@@ -418,9 +437,9 @@ A combination of these might alleviate the ~O(w(M+N))~ extra computations to a c
 #+TBLFM: $7=1.37/1.33
 We see a Similar performance to Q4 with it being slightly slow at some points (but and improved version of Q5 nonetheless). I would have liked to know how I could have improved this model w.r.t the part on exchanging corners.
 * References
- [1] Zhou, T., 2016. Factors Affecting Stencil Code Performance. [online] Scholarship.tricolib.brynmawr.edu. Available at: <https://scholarship.tricolib.brynmawr.edu/bitstream/handle/10066/18674/2016ZhouT.pdf?sequence=1&isAllowed=y> [Accessed 26 April 2021].
+ [1] Zhou, T., 2016. Factors Affecting Stencil Code Performance. [online] Scholarship.tricolib.brynmawr.edu. Available at: <https://scholarship.tricolib.brynmawr.edu/bitstream/handle/10066/18674/2016ZhouT.pdf?sequence=1&isAllowed=y> [Accessed 26 April 2021]. \\
 
- [2] Holewinski, J., 2021. High-Performance Code Generation for Stencil Computations on GPU Architectures. [online] http://web.cs.ucla.edu/~pouchet/doc/ics-article.12.pdf. Available at: <http://web.cs.ucla.edu/~pouchet/doc/ics-article.12.pdf> [Accessed 26 April 2021].
+ [2] Holewinski, J., 2021. High-Performance Code Generation for Stencil Computations on GPU Architectures. [online] http://web.cs.ucla.edu/~pouchet/doc/ics-article.12.pdf. Available at: <http://web.cs.ucla.edu/~pouchet/doc/ics-article.12.pdf> [Accessed 26 April 2021]. \\
 
  [3] Rivera, G. and Tseng, C., 2000. Tiling optimizations for 3D scientific computations | Proceedings of the 2000 ACM/IEEE conference on Supercomputing. [online] Dl.acm.org. Available at: <https://dl.acm.org/doi/10.5555/370049.370403> [Accessed 26 April 2021].
 
