@@ -10,6 +10,10 @@
 static int M, N, Gx, Gy, Bx, By; // local store of problem parameters
 static int verbosity;
 
+struct block_ranges {
+    int i_start, i_end, j_start, j_end;
+};
+
 //sets up parameters above
 void initParParams(int M_, int N_, int Gx_, int Gy_, int Bx_, int By_, 
 		   int verb) {
@@ -28,7 +32,14 @@ static void N2Coeff(double v, double *cm1, double *c0, double *cp1) {
 
 __global__
 void updateBoundaryNSP(int N, int M, double *u, int ldu) {
-  for (int j=1; j < N+1; j++) { //top and bottom halo
+
+  int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
+  int tot_tdy = blockDim.y * gridDim.y;
+  int n_tdy = N / tot_tdy;
+  int j_start = j_td * n_tdy;
+  int j_end = j_td < tot_tdy - 1 ? (j_td + 1) * n_tdy : N;
+
+  for (int j=j_start + 1; j < j_end + 1; j++) { //top and bottom halo
     V(u, 0, j)   = V(u, M, j);
     V(u, M+1, j) = V(u, 1, j);
   }
@@ -36,7 +47,12 @@ void updateBoundaryNSP(int N, int M, double *u, int ldu) {
 
 __global__
 void updateBoundaryEWP(int M, int N, double *u, int ldu) {
-  for (int i=0; i < M+2; i++) { //left and right sides of halo
+  int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int tot_tdx = blockDim.x * gridDim.x;
+  int n_tdx = M / tot_tdx;
+  int i_start = i_td * n_tdx;
+  int i_end = i_td < tot_tdx - 1 ? (i_td + 1) * n_tdx : M + 2;
+  for (int i=i_start; i < i_end; i++) { //left and right sides of halo
     V(u, i, 0) = V(u, i, N);
     V(u, i, N+1) = V(u, i, 1);
   }
@@ -51,13 +67,19 @@ void updateAdvectFieldKP(int M, int N, double *u, int ldu, double *v, int ldv,
 
   int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
   int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
-  int n_tdx = M / (blockDim.x * gridDim.x);
-  int n_tdy = N / (blockDim.y * gridDim.y);
+  int tot_tdx = blockDim.x * gridDim.x;
+  int tot_tdy = blockDim.y * gridDim.y;
+  int n_tdx = M / tot_tdx;
+  int n_tdy = N / tot_tdy;
   int i_start = i_td * n_tdx;
-  int i_end = blockIdx.x < gridDim.x - 1 ? (i_td + 1) * n_tdx : M;
+  int i_end = i_td < tot_tdx - 1 ? (i_td + 1) * n_tdx : M;
   int j_start = j_td * n_tdy;
-  int j_end = blockIdx.y < gridDim.y - 1 ? (j_td + 1) * n_tdy : N;
-  printf(":%d :%d i_start=%d i_end=%d j_start=%d j_end=%d\n", i_td, j_td, i_start, i_end, j_start, j_end);
+  int j_end = j_td < tot_tdy - 1 ? (j_td + 1) * n_tdy : N;
+  /*
+  printf(":%d :%d i_start=%d i_end=%d j_start=%d j_end=%d\n",
+         i_td, j_td, i_start, i_end, j_start, j_end);
+         */
+
   for (int i=i_start; i < i_end; i++)
     for (int j=j_start; j < j_end; j++)
       V(v,i,j) =
@@ -69,8 +91,19 @@ void updateAdvectFieldKP(int M, int N, double *u, int ldu, double *v, int ldv,
 
 __global__
 void copyFieldKP(int M, int N, double *u, int ldu, double *v, int ldv) {
-  for (int i=0; i < M; i++)
-    for (int j=0; j < N; j++)
+  int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
+  int tot_tdx = blockDim.x * gridDim.x;
+  int tot_tdy = blockDim.y * gridDim.y;
+  int n_tdx = M / tot_tdx;
+  int n_tdy = N / tot_tdy;
+  int i_start = i_td * n_tdx;
+  int i_end = i_td < tot_tdx - 1 ? (i_td + 1) * n_tdx : M;
+  int j_start = j_td * n_tdy;
+  int j_end = j_td < tot_tdy - 1 ? (j_td + 1) * n_tdy : N;
+
+  for (int i=i_start; i < i_end; i++)
+    for (int j=j_start; j < j_end; j++)
       V(v,i,j) = V(u,i,j);
 }
 
@@ -85,7 +118,7 @@ void cuda2DAdvect(int reps, double *u, int ldu) {
   dim3 dimB(Bx, By);
   for (int r = 0; r < reps; r++) {
     updateBoundaryNSP <<<dimG,dimB>>> (N, M, u, ldu);
-    updateBoundaryEWP <<<dimG,dimB>>> (M, N, u, ldu);
+    updateBoundaryEWP <<<dimG,dimB>>> (M, N, u, ldu); // <<<1,1>>> is also cool cuz stridestuff :/?
     updateAdvectFieldKP <<<dimG,dimB>>> (M, N, &V(u,1,1), ldu, &V(v,1,1), ldv,
 				  Ux, Uy);
     copyFieldKP <<<dimG,dimB>>> (M, N, &V(v,1,1), ldv, &V(u,1,1), ldu);
