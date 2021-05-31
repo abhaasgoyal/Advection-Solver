@@ -91,21 +91,11 @@ __global__ void updateAdvectFieldKP(int M, int N, double *u, int ldu, double *v,
 }
 
 __global__ void updateAdvectFieldOP(int M, int N, double *u, int ldu, double *v,
-                                    int ldv, double Ux, double Uy, int Byy) {
+                                    int ldv, double Ux, double Uy) {
   double cim1, ci0, cip1, cjm1, cj0, cjp1;
   N2Coeff(Ux, &cim1, &ci0, &cip1);
   N2Coeff(Uy, &cjm1, &cj0, &cjp1);
-  // TODO :- Tiling stuff (Need to research) ?!
-  int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
-  int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
-  int tot_tdx = blockDim.x * gridDim.x;
-  int tot_tdy = blockDim.y * gridDim.y;
-  int n_tdx = M / tot_tdx;
-  int n_tdy = N / tot_tdy;
-  int i_start = i_td * n_tdx;
-  int i_end = i_td < tot_tdx - 1 ? (i_td + 1) * n_tdx : M;
-  int j_start = j_td * n_tdy;
-  int j_end = j_td < tot_tdy - 1 ? (j_td + 1) * n_tdy : N;
+
   /* Define a __shared__ variable for the whole block (temp_u)
    * 1. Copy from global to shared
    * 2. Store (cjm1*V(u,i  ,j-1) + cj0*V(u,i,  j) + cjp1*V(u,i,  j+1)) in
@@ -113,44 +103,54 @@ __global__ void updateAdvectFieldOP(int M, int N, double *u, int ldu, double *v,
    * 3. Do cim1 * V(temp_u, i-1,j)  + ci0 * V(temp_u, i, j) + cip1 * V(temp_u,
    * i+1, j) and store in either temp_u (sync nope) or another shared variable?
    * 4. Copy temp_u from Shared to global
-   * Self Rules
+   *
+   * Self Imposed Rule :)
    * ---------
-   * Keep in powers of 2
-   * Try to do the above
-   * Curse your life
+   * Shared Block size should be <= 32 x 32
+   * i.e -> M / Gx   and N / Gy both should be <=32
    */
 
-  extern __shared__ double shData[];
-  for (int i = 0; i < i_end + 2; i++) {
-    for (int j = 0; j < j_end + 2; j++) {
-      shData[Byy * i + j] = V(u, i + i_start - 1, j + j_start - 1);
-    }
+  int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
+  int tot_tdx = blockDim.x * gridDim.x;
+  int tot_tdy = blockDim.y * gridDim.y;
+  int n_tdx = M / tot_tdx;
+  int n_tdy = N / tot_tdy;
+  int i_start = i_td * n_tdx;
+  int i_end = i_td < tot_tdx - 1 ? i_start + n_tdx : M;
+  int j_start = j_td * n_tdy;
+  int j_end = j_td < tot_tdy - 1 ? j_start + n_tdy : N;
+  int it_start = threadIdx.x * n_tdx;
+  int jt_start = threadIdx.y * n_tdy;
+
+   // printf(":%d :%d i_start=%d i_end=%d j_start=%d j_end=%d it_start=%d jt_start=%d\n",
+   //        i_td, j_td, i_start, i_end, j_start, j_end, it_start, jt_start);
+
+  __shared__ double aData[34][32], bData[32][32];
+  for (int i = 0; i < (i_end - i_start) + 2; i++) {
+      for (int j = 0; j < (j_end - j_start); j++) {
+          aData[i + it_start][j + jt_start] = cjm1 * V(u, i + i_start - 1, j + j_start - 1)
+              + cj0 * V(u, i + i_start - 1, j + j_start)
+              + cjp1 * V(u, i + i_start - 1, j + j_start + 1);
+      }
   }
   __syncthreads();
 
-  for (int i = 0; i < i_end + 2; i++) {
-    for (int j = 1; j < j_end; j++) {
-      shData[Byy * i + j] = cjm1 * shData[Byy * i + j - 1] +
-                            cj0 * shData[Byy * i + j] +
-                            cjp1 * shData[Byy * i + j + 1];
-    }
-  }
 
-  __syncthreads();
 
-  for (int i = 1; i < i_end; i++) {
-    for (int j = 0; j < j_end + 2; j++) {
-      shData[Byy * i + j] = cim1 * shData[Byy * (i - 1) + j] +
-                            ci0 * shData[Byy * i + j] +
-                            cip1 * shData[Byy * (i + 1) + j];
-    }
+  for (int i = 1; i <= (i_end - i_start); i++) {
+      for (int j = 0; j < (j_end - j_start); j++) {
+          bData[i + it_start - 1][j + jt_start] = cim1 * aData[i + it_start-1][j + jt_start] +
+              ci0 * aData[i + it_start][j + jt_start] +
+              cip1 * aData[i + it_start + 1][j + jt_start];
+      }
   }
   __syncthreads();
 
-  for (int i = 0; i < i_end; i++) {
-    for (int j = 0; j < j_end; j++) {
-      V(u, i + i_start, j + j_start) = shData[Byy * (i + 1) + (j + 1)];
-    }
+  for (int i = 0; i < i_end - i_start; i++) {
+      for (int j = 0; j < j_end - j_start; j++) {
+          V(v, i_start + i, j_start + j) = bData[i + it_start][j + jt_start];
+      }
   }
   __syncthreads();
 
@@ -223,10 +223,11 @@ void cudaOptAdvect(int reps, double *u, int ldu, int w) {
     updateBoundaryNSP<<<dimG, dimB>>>(N, M, temp_u, ldu);
     updateBoundaryEWP<<<dimG, dimB>>>(
         M, N, temp_u, ldu); // <<<1,1>>> is also cool cuz stridestuff :/?
-    updateAdvectFieldOP<<<dimG, dimB, (Bx + 2) * (By + 2) * sizeof(float)>>>(
-        M, N, &V_(temp_u, ldu, 1, 1), ldu, &V(v, 1, 1), ldv, Ux, Uy, By);
+    updateAdvectFieldOP<<<dimG, dimB>>>(M, N, &V_(temp_u, ldu, 1, 1), ldu,
+                                        &V(v, 1, 1), ldv, Ux, Uy);
     copyFieldKP<<<dimG, dimB>>>(M, N, &V(v, 1, 1), ldv, &V_(temp_u, ldu, 1, 1),
                                 ldu);
+
   } // for(r...)
   HANDLE_ERROR(cudaMemcpy(u, temp_u, ldv * (M + 2) * sizeof(double),
                           cudaMemcpyDeviceToHost));
