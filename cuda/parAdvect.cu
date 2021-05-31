@@ -104,10 +104,12 @@ __global__ void updateAdvectFieldOP(int M, int N, double *u, int ldu, double *v,
    * i+1, j) and store in either temp_u (sync nope) or another shared variable?
    * 4. Copy temp_u from Shared to global
    *
-   * Self Imposed Rule :)
+   * Self Imposed Rules :)
    * ---------
    * Shared Block size should be <= 32 x 32
    * i.e -> M / Gx   and N / Gy both should be <=32
+   *
+   * Also Bx and By should fit in the whole block (Don't put any of them on hold)
    */
 
   int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
@@ -123,34 +125,35 @@ __global__ void updateAdvectFieldOP(int M, int N, double *u, int ldu, double *v,
   int it_start = threadIdx.x * n_tdx;
   int jt_start = threadIdx.y * n_tdy;
 
-   // printf(":%d :%d i_start=%d i_end=%d j_start=%d j_end=%d it_start=%d jt_start=%d\n",
-   //        i_td, j_td, i_start, i_end, j_start, j_end, it_start, jt_start);
+  // printf(":%d :%d i_start=%d i_end=%d j_start=%d j_end=%d it_start=%d
+  // jt_start=%d\n",
+  //        i_td, j_td, i_start, i_end, j_start, j_end, it_start, jt_start);
 
   __shared__ double aData[34][32], bData[32][32];
   for (int i = 0; i < (i_end - i_start) + 2; i++) {
-      for (int j = 0; j < (j_end - j_start); j++) {
-          aData[i + it_start][j + jt_start] = cjm1 * V(u, i + i_start - 1, j + j_start - 1)
-              + cj0 * V(u, i + i_start - 1, j + j_start)
-              + cjp1 * V(u, i + i_start - 1, j + j_start + 1);
-      }
+    for (int j = 0; j < (j_end - j_start); j++) {
+      aData[i + it_start][j + jt_start] =
+          cjm1 * V(u, i + i_start - 1, j + j_start - 1) +
+          cj0 * V(u, i + i_start - 1, j + j_start) +
+          cjp1 * V(u, i + i_start - 1, j + j_start + 1);
+    }
   }
   __syncthreads();
 
-
-
   for (int i = 1; i <= (i_end - i_start); i++) {
-      for (int j = 0; j < (j_end - j_start); j++) {
-          bData[i + it_start - 1][j + jt_start] = cim1 * aData[i + it_start-1][j + jt_start] +
-              ci0 * aData[i + it_start][j + jt_start] +
-              cip1 * aData[i + it_start + 1][j + jt_start];
-      }
+    for (int j = 0; j < (j_end - j_start); j++) {
+      bData[i + it_start - 1][j + jt_start] =
+          cim1 * aData[i + it_start - 1][j + jt_start] +
+          ci0 * aData[i + it_start][j + jt_start] +
+          cip1 * aData[i + it_start + 1][j + jt_start];
+    }
   }
   __syncthreads();
 
   for (int i = 0; i < i_end - i_start; i++) {
-      for (int j = 0; j < j_end - j_start; j++) {
-          V(v, i_start + i, j_start + j) = bData[i + it_start][j + jt_start];
-      }
+    for (int j = 0; j < j_end - j_start; j++) {
+      V(v, i_start + i, j_start + j) = bData[i + it_start][j + jt_start];
+    }
   }
   __syncthreads();
 
