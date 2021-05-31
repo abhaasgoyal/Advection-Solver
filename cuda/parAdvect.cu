@@ -49,8 +49,17 @@ void updateAdvectFieldKP(int M, int N, double *u, int ldu, double *v, int ldv,
   N2Coeff(Ux, &cim1, &ci0, &cip1);
   N2Coeff(Uy, &cjm1, &cj0, &cjp1);
 
-  for (int i=0; i < M; i++)
-    for (int j=0; j < N; j++)
+  int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
+  int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
+  int n_tdx = M / (blockDim.x * gridDim.x);
+  int n_tdy = N / (blockDim.y * gridDim.y);
+  int i_start = i_td * n_tdx;
+  int i_end = blockIdx.x < gridDim.x - 1 ? (i_td + 1) * n_tdx : M;
+  int j_start = j_td * n_tdy;
+  int j_end = blockIdx.y < gridDim.y - 1 ? (j_td + 1) * n_tdy : N;
+  printf(":%d :%d i_start=%d i_end=%d j_start=%d j_end=%d\n", i_td, j_td, i_start, i_end, j_start, j_end);
+  for (int i=i_start; i < i_end; i++)
+    for (int j=j_start; j < j_end; j++)
       V(v,i,j) =
         cim1*(cjm1*V(u,i-1,j-1) + cj0*V(u,i-1,j) + cjp1*V(u,i-1,j+1)) +
         ci0 *(cjm1*V(u,i  ,j-1) + cj0*V(u,i,  j) + cjp1*V(u,i,  j+1)) +
@@ -72,12 +81,14 @@ void cuda2DAdvect(int reps, double *u, int ldu) {
   double Ux = Velx * dt / deltax, Uy = Vely * dt / deltay;
   int ldv = N+2; double *v;
   HANDLE_ERROR( cudaMalloc(&v, ldv*(M+2)*sizeof(double)) );
+  dim3 dimG(Gx, Gy);
+  dim3 dimB(Bx, By);
   for (int r = 0; r < reps; r++) {
-    updateBoundaryNSP <<<1,1>>> (N, M, u, ldu);
-    updateBoundaryEWP <<<1,1>>> (M, N, u, ldu);
-    updateAdvectFieldKP <<<1,1>>> (M, N, &V(u,1,1), ldu, &V(v,1,1), ldv,
+    updateBoundaryNSP <<<dimG,dimB>>> (N, M, u, ldu);
+    updateBoundaryEWP <<<dimG,dimB>>> (M, N, u, ldu);
+    updateAdvectFieldKP <<<dimG,dimB>>> (M, N, &V(u,1,1), ldu, &V(v,1,1), ldv,
 				  Ux, Uy);
-    copyFieldKP <<<1,1>>> (M, N, &V(v,1,1), ldv, &V(u,1,1), ldu);
+    copyFieldKP <<<dimG,dimB>>> (M, N, &V(v,1,1), ldv, &V(u,1,1), ldu);
   } //for(r...)
   HANDLE_ERROR( cudaFree(v) );
 } //cuda2DAdvect()
