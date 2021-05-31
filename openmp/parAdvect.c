@@ -138,7 +138,7 @@ void ompAdvectExtra(int reps, double *u, int ldu) {
 
   } // for (r...)
   if (reps % 2 == 0) {
-    omp1dCopyField(&V(v, 1, 1), ldv, &V(u, 1, 1), ldu);
+    omp1dCopyField(&V(u, 1, 1), ldv, &V(v, 1, 1), ldu);
   }
   free(v);
 } // ompAdvectExtra()
