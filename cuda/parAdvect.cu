@@ -90,91 +90,6 @@ __global__ void updateAdvectFieldKP(int M, int N, double *u, int ldu, double *v,
                            cjp1 * V(u, i + 1, j + 1));
 }
 
-__global__ void updateAdvectFieldOP(int M, int N, double *u, int ldu, double *v,
-                                    int ldv, double Ux, double Uy) {
-  double cim1, ci0, cip1, cjm1, cj0, cjp1;
-  N2Coeff(Ux, &cim1, &ci0, &cip1);
-  N2Coeff(Uy, &cjm1, &cj0, &cjp1);
-
-  /* Define a __shared__ variable for the whole block (temp_u)
-   * 1. Copy from global to shared
-   * 2. Store (cjm1*V(u,i  ,j-1) + cj0*V(u,i,  j) + cjp1*V(u,i,  j+1)) in
-   * V(temp_u,i,j)
-   * 3. Do cim1 * V(temp_u, i-1,j)  + ci0 * V(temp_u, i, j) + cip1 * V(temp_u,
-   * i+1, j) and store in either temp_u (sync nope) or another shared variable?
-   * 4. Copy temp_u from Shared to global
-   *
-   * Self Imposed Rules :)
-   * ---------
-   * Shared Block size should be <= 32 x 32
-   * i.e -> M / Gx   and N / Gy both should be <=32
-   *
-   * Also Bx and By should fit in the whole block (Don't put any of them on hold)
-   *
-   * TODO
-   * Load into local memory, then transfer to shared memory, do operations with shared
-   * transfer back to local
-   */
-
-  int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
-  int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
-  int tot_tdx = blockDim.x * gridDim.x;
-  int tot_tdy = blockDim.y * gridDim.y;
-  int n_tdx = M / tot_tdx;
-  int n_tdy = N / tot_tdy;
-  int i_start = i_td * n_tdx;
-  int i_end = i_td < tot_tdx - 1 ? i_start + n_tdx : M;
-  int j_start = j_td * n_tdy;
-  int j_end = j_td < tot_tdy - 1 ? j_start + n_tdy : N;
-  int it_start = threadIdx.x * n_tdx;
-  int jt_start = threadIdx.y * n_tdy;
-  
-  const int std_i_range = (i_end - i_start) ;
-  const int std_j_range = (j_end - j_start) ;
-  // printf(":%d :%d i_start=%d i_end=%d j_start=%d j_end=%d it_start=%d
-  // jt_start=%d\n",
-  //        i_td, j_td, i_start, i_end, j_start, j_end, it_start, jt_start);
-
-  __shared__ double aData[34][32], bData[32][32];
-
-  for (int i = 0; i < std_i_range + 2; i++) {
-    for (int j = 0; j < std_j_range; j++) {
-      aData[i + it_start][j + jt_start] =
-          cjm1 * V(u, i + i_start - 1, j + j_start - 1) +
-          cj0 * V(u, i + i_start - 1, j + j_start) +
-          cjp1 * V(u, i + i_start - 1, j + j_start + 1);
-    }
-  }
-  __syncthreads();
-
-  for (int i = 1; i <= std_i_range; i++) {
-    for (int j = 0; j < std_j_range; j++) {
-      bData[i + it_start - 1][j + jt_start] =
-          cim1 * aData[i + it_start - 1][j + jt_start] +
-          ci0 * aData[i + it_start][j + jt_start] +
-          cip1 * aData[i + it_start + 1][j + jt_start];
-    }
-  }
-  __syncthreads();
-
-  for (int i = 0; i < std_i_range; i++) {
-    for (int j = 0; j < std_j_range; j++) {
-      V(v, i_start + i, j_start + j) = bData[i + it_start][j + jt_start];
-    }
-  }
-  __syncthreads();
-
-  /*
-  for (int i=i_start; i < i_end; i++)
-    for (int j=j_start; j < j_end; j++)
-      V(v,i,j) =
-        cim1*(cjm1*V(u,i-1,j-1) + cj0*V(u,i-1,j) + cjp1*V(u,i-1,j+1)) +
-        ci0 *(cjm1*V(u,i  ,j-1) + cj0*V(u,i,  j) + cjp1*V(u,i,  j+1)) +
-        cip1*(cjm1*V(u,i+1,j-1) + cj0*V(u,i+1,j) + cjp1*V(u,i+1,j+1));
-  */
-}
-
-
 __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu, double *v,
                                     int ldv, double Ux, double Uy) {
   double cim1, ci0, cip1, cjm1, cj0, cjp1;
@@ -184,7 +99,8 @@ __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu, double *v
   /* Best tiling
    * Self Imposed Rules :)
    * ---------
-   * Divisible
+   * Divisibibility
+   * (M % Bx == 0) && (M % Gx == 0) && (N % By ==0) && (N % Gy ==0);
    */
 
   __shared__ double aData[34][32], bData[32][32];
@@ -197,10 +113,8 @@ __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu, double *v
   int ny_bsize = N / gridDim.y;
   for (int i = 0; i < n_tdx; i++) {
       for (int j = 0; j < n_tdy; j++) {
-          // printf("\n");
           int tp_i = i * bdx + blockIdx.x * nx_bsize + tdx;
           int tp_j = j * bdy + blockIdx.y * ny_bsize + tdy;
-          // printf("%d %d :%d%d %d %d\n", i, j, tdx, tdy, tp_i, tp_j);
 
           aData[1 + tdx][tdy] =
               cjm1 * V(u, tp_i, tp_j - 1)
@@ -235,35 +149,6 @@ __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu, double *v
           __syncthreads();
       }
   }
-
-  /*
-  int i_td = (blockIdx.x * blockDim.x) + threadIdx.x;
-  int j_td = (blockIdx.y * blockDim.y) + threadIdx.y;
-  int tot_tdx = blockDim.x * gridDim.x;
-  int tot_tdy = blockDim.y * gridDim.y;
-  int n_tdx = M / tot_tdx;
-  int n_tdy = N / tot_tdy;
-  int i_start = i_td * n_tdx;
-  int i_end = i_td < tot_tdx - 1 ? i_start + n_tdx : M;
-  int j_start = j_td * n_tdy;
-  int j_end = j_td < tot_tdy - 1 ? j_start + n_tdy : N;
-
-  for (int i=i_start; i < i_end; i++)
-    for (int j=j_start; j < j_end; j++)
-      V(v,i,j) =
-        cim1*(cjm1*V(u,i-1,j-1) + cj0*V(u,i-1,j) + cjp1*V(u,i-1,j+1)) +
-        ci0 *(cjm1*V(u,i  ,j-1) + cj0*V(u,i,  j) + cjp1*V(u,i,  j+1)) +
-        cip1*(cjm1*V(u,i+1,j-1) + cj0*V(u,i+1,j) + cjp1*V(u,i+1,j+1));
-        */
-
-  /*
-  for (int i=i_start; i < i_end; i++)
-    for (int j=j_start; j < j_end; j++)
-      V(v,i,j) =
-        cim1*(cjm1*V(u,i-1,j-1) + cj0*V(u,i-1,j) + cjp1*V(u,i-1,j+1)) +
-        ci0 *(cjm1*V(u,i  ,j-1) + cj0*V(u,i,  j) + cjp1*V(u,i,  j+1)) +
-        cip1*(cjm1*V(u,i+1,j-1) + cj0*V(u,i+1,j) + cjp1*V(u,i+1,j+1));
-  */
 }
 
 __global__ void copyFieldKP(int M, int N, double *u, int ldu, double *v,
