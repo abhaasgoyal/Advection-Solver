@@ -102,7 +102,8 @@ __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu,
   N2Coeff(Uy, &cjm1, &cj0, &cjp1);
 
   // Initializing parameters
-  int Bx = blockDim.x, By = blockDim.y, tdx = threadIdx.x, tdy = threadIdx.y, Gx = gridDim.x, Gy = gridDim.y;
+  int Bx = blockDim.x, By = blockDim.y, tdx = threadIdx.x, tdy = threadIdx.y,
+      Gx = gridDim.x, Gy = gridDim.y;
 
   // Setting up aData and bData in shared memory
   // (Bx + 2) since we load 2 extra rows initially
@@ -139,7 +140,6 @@ __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu,
                                   cj0 * V(u, tp_i - 1, tp_j) +
                                   cjp1 * V(u, tp_i - 1, tp_j + 1);
         }
-
 
         if (tdx == Bx - 1 || tp_i == M - 1) {
           V_(aData, By, tdx + 2, tdy) = cjm1 * V(u, tp_i + 1, tp_j - 1) +
@@ -223,20 +223,20 @@ void cudaOptAdvect(int reps, double *u, int ldu, int w) {
                           cudaMemcpyHostToDevice));
   for (int r = 0; r < reps; r++) {
     if (r % 2 == 0) {
-    updateBoundaryNSP<<<dimG, dimB>>>(N, M, temp_u, ldu);
-    updateBoundaryEWP<<<dimG, dimB>>>(M, N, temp_u, ldu);
-    updateAdvectFieldOPN<<<dimG, dimB, (2 * Bx + 2) * By * sizeof(double)>>>(
-        M, N, &V_(temp_u, ldu, 1, 1), ldu, &V(v, 1, 1), ldv, Ux, Uy);
+      updateBoundaryNSP<<<dimG, dimB>>>(N, M, temp_u, ldu);
+      updateBoundaryEWP<<<dimG, dimB>>>(M, N, temp_u, ldu);
+      updateAdvectFieldOPN<<<dimG, dimB, (2 * Bx + 2) * By * sizeof(double)>>>(
+          M, N, &V_(temp_u, ldu, 1, 1), ldu, &V(v, 1, 1), ldv, Ux, Uy);
     } else {
-    updateBoundaryNSP<<<dimG, dimB>>>(N, M, v, ldu);
-    updateBoundaryEWP<<<dimG, dimB>>>(M, N, v, ldu);
-    updateAdvectFieldOPN<<<dimG, dimB, (2 * Bx + 2) * By * sizeof(double)>>>(
-        M, N, &V(v, 1, 1), ldu, &V_(temp_u, ldu, 1, 1), ldv, Ux, Uy);
+      updateBoundaryNSP<<<dimG, dimB>>>(N, M, v, ldu);
+      updateBoundaryEWP<<<dimG, dimB>>>(M, N, v, ldu);
+      updateAdvectFieldOPN<<<dimG, dimB, (2 * Bx + 2) * By * sizeof(double)>>>(
+          M, N, &V(v, 1, 1), ldu, &V_(temp_u, ldu, 1, 1), ldv, Ux, Uy);
     }
   } // for(r...)
   if (reps % 2 == 1) {
-    copyFieldKP<<<dimG, dimB>>>(M, N, &V(v, 1, 1), ldv, &V_(temp_u, ldu, 1, 1), ldu);
-
+    copyFieldKP<<<dimG, dimB>>>(M, N, &V(v, 1, 1), ldv, &V_(temp_u, ldu, 1, 1),
+                                ldu);
   }
   HANDLE_ERROR(cudaMemcpy(u, temp_u, ldv * (M + 2) * sizeof(double),
                           cudaMemcpyDeviceToHost));

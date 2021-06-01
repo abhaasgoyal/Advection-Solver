@@ -20,6 +20,7 @@ void initParParams(int M_, int N_, int P_, int Q_, int verb) {
 
 static void omp1dUpdateBoundary(double *u, int ldu) {
   int i, j;
+  // Simple Parallelizing for loop
 #pragma omp parallel for
   for (j = 1; j < N + 1; j++) { // top and bottom halo
     V(u, 0, j) = V(u, M, j);
@@ -37,23 +38,25 @@ static void omp1dUpdateAdvectField(double *u, int ldu, double *v, int ldv) {
   double cim1, ci0, cip1, cjm1, cj0, cjp1;
   N2Coeff(Ux, &cim1, &ci0, &cip1);
   N2Coeff(Uy, &cjm1, &cj0, &cjp1);
-#pragma omp parallel default(shared)
-  {
-#pragma omp for private(j)
-    for (i = 0; i < M; i++) {
-      for (j = 0; j < N; j++)
-        V(v, i, j) = cim1 * (cjm1 * V(u, i - 1, j - 1) + cj0 * V(u, i - 1, j) +
-                             cjp1 * V(u, i - 1, j + 1)) +
-                     ci0 * (cjm1 * V(u, i, j - 1) + cj0 * V(u, i, j) +
-                            cjp1 * V(u, i, j + 1)) +
-                     cip1 * (cjm1 * V(u, i + 1, j - 1) + cj0 * V(u, i + 1, j) +
-                             cjp1 * V(u, i + 1, j + 1));
-    }
+  // Simple Parallelizing outermost for loop keeping j private
+  // is the fastest in terms of performance
+#pragma omp parallel for default(shared) private(j)
+  for (i = 0; i < M; i++) {
+    for (j = 0; j < N; j++)
+      V(v, i, j) = cim1 * (cjm1 * V(u, i - 1, j - 1) + cj0 * V(u, i - 1, j) +
+                           cjp1 * V(u, i - 1, j + 1)) +
+                   ci0 * (cjm1 * V(u, i, j - 1) + cj0 * V(u, i, j) +
+                          cjp1 * V(u, i, j + 1)) +
+                   cip1 * (cjm1 * V(u, i + 1, j - 1) + cj0 * V(u, i + 1, j) +
+                           cjp1 * V(u, i + 1, j + 1));
   }
 } // omp1dUpdateAdvectField()
 
 static void omp1dCopyField(double *v, int ldv, double *u, int ldu) {
   int i, j;
+  // Simple Parallelizing outermost for loop keeping j private
+  // is the fastest in terms of performance
+#pragma omp parallel for default(shared) private(j)
   for (i = 0; i < M; i++)
     for (j = 0; j < N; j++)
       V(u, i, j) = V(v, i, j);
@@ -78,7 +81,7 @@ void omp2dAdvect(int reps, double *u, int ldu) {
   int ldv = N + 2;
   double *v = calloc(ldv * (M + 2), sizeof(double));
   assert(v != NULL);
-
+// Single parallel region
 #pragma omp parallel default(shared)
   {
     int i, j;
@@ -88,32 +91,43 @@ void omp2dAdvect(int reps, double *u, int ldu) {
     int M_size = M / P;
     int N_size = N / Q;
 
+    // Initializing shared regions based on id
     P0 = id / Q;
     Q0 = id % Q;
 
+    // Set initital index and length of shared memory block
     int M0 = P0 * M_size;
     int N0 = Q0 * N_size;
     int M_loc = P0 < P - 1 ? M_size : M - M0;
     int N_loc = Q0 < Q - 1 ? N_size : N - N0;
 
+    // Last column in shared memory additional condition
     int LRlast = P0 < P - 1 ? M_loc : M_loc + 2;
 
+    // Update top and bottom boundary
     for (r = 0; r < reps; r++) {
       for (j = N0 + 1; j < N0 + N_loc + 1; j++) { // top and bottom halo
         V(u, 0, j) = V(u, M, j);
         V(u, M + 1, j) = V(u, 1, j);
       }
 
+      // Update left and right boundary
 #pragma omp barrier
       for (i = M0; i < M0 + LRlast; i++) { // left and right  halo
         V(u, i, 0) = V(u, i, N);
         V(u, i, N + 1) = V(u, i, 1);
       }
+      // Update the field (no barrier needed unless Q=1 and P > 1)
+      if (Q == 1 && P > 1) {
+#pragma omp barrier
+      }
       updateAdvectField(M_loc, N_loc, &V(u, M0 + 1, N0 + 1), ldu,
                         &V(v, M0 + 1, N0 + 1), ldv);
 
+      // Wait for update to happen
 #pragma omp barrier
 
+      // Copy back I guess
       copyField(M_loc, N_loc, &V(v, M0 + 1, N0 + 1), ldv, &V(u, M0 + 1, N0 + 1),
                 ldu);
     } // for (r...)
