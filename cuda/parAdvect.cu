@@ -91,7 +91,7 @@ __global__ void updateAdvectFieldKP(int M, int N, double *u, int ldu, double *v,
 }
 
 __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu,
-                                     double *v, int ldv, double Ux, double Uy) {
+                                     double *v, int ldv, double Ux, double Uy, int Bx, int By) {
   double cim1, ci0, cip1, cjm1, cj0, cjp1;
   N2Coeff(Ux, &cim1, &ci0, &cip1);
   N2Coeff(Uy, &cjm1, &cj0, &cjp1);
@@ -101,47 +101,55 @@ __global__ void updateAdvectFieldOPN(int M, int N, double *u, int ldu,
    * ---------
    * Divisibibility
    * (M % Bx == 0) && (M % Gx == 0) && (N % By ==0) && (N % Gy ==0);
+   *
+   * Since aData and bData are static, as of now size of Bx and By cant
+   * be > 32
    */
 
   __shared__ double aData[34][32], bData[32][32];
   int bdx = blockDim.x, bdy = blockDim.y, tdx = threadIdx.x, tdy = threadIdx.y;
   int tot_tdx = blockDim.x * gridDim.x;
   int tot_tdy = blockDim.y * gridDim.y;
-  int n_tdx = M / tot_tdx;
-  int n_tdy = N / tot_tdy;
-  int nx_bsize = M / gridDim.x;
-  int ny_bsize = N / gridDim.y;
+
+  // Allow padding
+  int n_tdx = (M + tot_tdx - 1) / tot_tdx;
+  int n_tdy = (N + tot_tdy - 1) / tot_tdy;
+
   for (int i = 0; i < n_tdx; i++) {
     for (int j = 0; j < n_tdy; j++) {
-      int tp_i = i * bdx + blockIdx.x * nx_bsize + tdx;
-      int tp_j = j * bdy + blockIdx.y * ny_bsize + tdy;
+      int tp_i = i * Bx * gridDim.x + blockIdx.x * Bx + tdx;
+      int tp_j = j * By * gridDim.y + blockIdx.y * By + tdy;
 
-      aData[1 + tdx][tdy] = cjm1 * V(u, tp_i, tp_j - 1) +
-                            cj0 * V(u, tp_i, tp_j) +
-                            cjp1 * V(u, tp_i, tp_j + 1);
 
-      if (tdx == 0) {
-        aData[0][tdy] = cjm1 * V(u, tp_i - 1, tp_j - 1) +
-                        cj0 * V(u, tp_i - 1, tp_j) +
-                        cjp1 * V(u, tp_i - 1, tp_j + 1);
+      if (tp_i < M && tp_j < N) {
+        // printf(":%d :%d bidx=%d bidy=%d tpi_%d tp_j=%d \n", i, j, By, blockIdx.y, tp_i, tp_j);
+        aData[1 + tdx][tdy] = cjm1 * V(u, tp_i, tp_j - 1) +
+                              cj0 * V(u, tp_i, tp_j) +
+                              cjp1 * V(u, tp_i, tp_j + 1);
+
+        if (tdx == 0) {
+          aData[0][tdy] = cjm1 * V(u, tp_i - 1, tp_j - 1) +
+                          cj0 * V(u, tp_i - 1, tp_j) +
+                          cjp1 * V(u, tp_i - 1, tp_j + 1);
+        }
+
+        if (tdx == bdx - 1 || tp_i == M - 1) {
+          aData[tdx + 2][tdy] = cjm1 * V(u, tp_i + 1, tp_j - 1) +
+                                cj0 * V(u, tp_i + 1, tp_j) +
+                                cjp1 * V(u, tp_i + 1, tp_j + 1);
+        }
+
+        __syncthreads();
+
+        bData[tdx][tdy] = cim1 * aData[tdx][tdy] + ci0 * aData[tdx + 1][tdy] +
+                          cip1 * aData[tdx + 2][tdy];
+
+        __syncthreads();
+
+        V(v, tp_i, tp_j) = bData[tdx][tdy];
+
+        __syncthreads();
       }
-
-      if (tdx == bdx - 1) {
-        aData[bdx + 1][tdy] = cjm1 * V(u, tp_i + 1, tp_j - 1) +
-                              cj0 * V(u, tp_i + 1, tp_j) +
-                              cjp1 * V(u, tp_i + 1, tp_j + 1);
-      }
-
-      __syncthreads();
-
-      bData[tdx][tdy] = cim1 * aData[tdx][tdy] + ci0 * aData[tdx + 1][tdy] +
-                        cip1 * aData[tdx + 2][tdy];
-
-      __syncthreads();
-
-      V(v, tp_i, tp_j) = bData[tdx][tdy];
-
-      __syncthreads();
     }
   }
 }
@@ -201,19 +209,12 @@ void cudaOptAdvect(int reps, double *u, int ldu, int w) {
   dim3 dimB(Bx, By);
   HANDLE_ERROR(cudaMemcpy(temp_u, u, ldv * (M + 2) * sizeof(double),
                           cudaMemcpyHostToDevice));
-  bool isEvenlyDiv =
-      (M % Bx == 0) && (M % Gx == 0) && (N % By == 0) && (N % Gy == 0);
   for (int r = 0; r < reps; r++) {
     updateBoundaryNSP<<<dimG, dimB>>>(N, M, temp_u, ldu);
     updateBoundaryEWP<<<dimG, dimB>>>(
         M, N, temp_u, ldu); // <<<1,1>>> is also cool cuz stridestuff :/?
-    if (isEvenlyDiv) {
-      updateAdvectFieldOPN<<<dimG, dimB>>>(M, N, &V_(temp_u, ldu, 1, 1), ldu,
-                                           &V(v, 1, 1), ldv, Ux, Uy);
-    } else {
-      updateAdvectFieldKP<<<dimG, dimB>>>(M, N, &V_(temp_u, ldu, 1, 1), ldu,
-                                          &V(v, 1, 1), ldv, Ux, Uy);
-    }
+    updateAdvectFieldOPN<<<dimG, dimB>>>(M, N, &V_(temp_u, ldu, 1, 1), ldu,
+                                         &V(v, 1, 1), ldv, Ux, Uy, Bx, By);
     copyFieldKP<<<dimG, dimB>>>(M, N, &V(v, 1, 1), ldv, &V_(temp_u, ldu, 1, 1),
                                 ldu);
 
