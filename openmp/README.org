@@ -1,0 +1,278 @@
+#+TITLE: Advection Solver using OpenMP
+#+OPTIONS: toc:nil num:2
+#+LaTex_header: \input{header.tex}
+#+LATEX: \setlength\parindent{0pt}
+#+LATEX_COMPILER: xelatex
+#+AUTHOR: Abhaas Goyal (u7145384)
+
+#+CAPTION: Table abbreviations
+|-------+----------------------|
+| *A_T* | Advection Time       |
+| *G_F* | Gigaflops per second |
+| *P_C* | Per core (with G_F)  |
+| *N_T* | Number of threads    |
+| *NP*  | Number of processes  |
+| *C_T* | Calculated time      |
+| *I_T* | Instruction type     |
+|-------+----------------------|
+
+* Parallelization via 1D Decomposition and Simple Directives
+** Updation policies
+1. ~omp1dUpdateAdvectField()~ - updated via the metrics described below
+2. ~omp1dCopyField()~ - same as the best performant (1) from metrics. (Although loop fusion can be done to significantly reduce the load of copying in each iteration[2]) - even better optimization is done at the end of Q4 than the approach just mentioned, where ~omp1dCopyField~ is only called after the last iteration.
+3. ~omp1dBoundaryRegions()~ - parallelized only the top and bottom halo exchange and not left and right exchange, because cache for only 2 elements in each row (leftmost and rightmost block) would be loaded for different threads so there will be a lot of read/write cache misses. Whereas in top and bottom exchange parallelizing would lead to only 2 rows of cache blocks (one for top and another for bottom) to load for each thread so performance would be worth it (for large values of ~N~).
+** Metrics
+Let ~t = No of threads, r= No of repetitions~
+
+1. *Maximize performance* - =(a)=
+
+   *Code*
+   #+begin_src c
+#pragma omp parallel for default(shared) private(j)
+  for (i = 0; i < M; i++) {
+    for (j = 0; j < N; j++)
+      // Update V(v,i,j)
+  }
+   #+end_src
+   *Analysis*
+
+   Best practice is to parallelize the outer loop (i.e. rows) - which significantly reduces overheads with minimal parallel regions being created. Also, parallelize the outer loop, while iterating through the columns privately gives us maximal performance (by minimizing cache reads/writes) and creates ~t~ separarate parallel regions (each of size around ~(N * M)/t~ blocks).
+
+2. *Maximize parallel region entry/exits* =(b)=
+
+   *Code*
+   #+begin_src c
+  for (i = 0; j < M; i++) {
+    #pragma omp parallel for default(shared)
+    for (j = 0; j < N; j++)
+      // Update V(v,i,j)
+  }
+   #+end_src
+    *Analysis*
+
+    To create more parallel regions, we just parallelize the innermost loop (in this case j). In each iteration of i, we would be getting ~t~ parallel regions of size around ~N/t~, so after all iterations, one would be getting around ration, I would be getting around ~M * t~ parallel regions, which is maximal. (This is assuming that ~M >= N~ - if the opposite is true then switch ~i~ and ~j~, keep ~i~ in innermost loop and parallelise over ~i~)
+
+3. *Maximize cache misses involving coherent reads* =(c)=
+
+   *Visualization*
+      #+begin_src
+    t   | 1 2 3 4 |
+    ----+----------|
+    i   |          |
+    0   | *        |
+    1   |   *      |
+    2   |     *    |
+    3   |       *  |
+    4   | *        |
+    5   |   *      |
+    6   |     *    |
+    7   |       *  |
+    .   | *        |
+    .   |          |
+    n   |       *  |
+        |----------|
+       (inspired from [1])
+      #+end_src
+
+    *Code*
+      #+begin_src c
+   #pragma omp parallel for default(shared) private(j) schedule(static,1)
+     for (i = 0; i < M; i++) {
+       for (j = 0; j < N; j++)
+         // Update V(v,i,j)
+     }
+      #+end_src
+
+    *Analysis*
+   - To maximize cache misses I applied a policy of statically scheduling parallel regions to 1 element in a cyclic fashion.
+   - In this case loading at a thread in each iteration (in a round robin fashion) is done.
+   - For the distribution of various parts, here's a visualization. Assume no of threads are 4. Then we divide the threads in static blocks of size i, like- for every iteration, a new cache block for each new thread has to be loaded considering the size of each thread's row. Although once it has been loaded, writing becames faster - so can't really use this in metric 4.
+   - To implement this, one does the usual of parallelizing over outer loops but add ~schedule(static,1)~ to it.
+
+4. *Maximize cache misses involving coherent writes* =(d)=
+
+   *Visualization*
+   #+begin_src
+    j |  0 1 2 3 4 5 6 7 .   .    .   .   .   n
+    --+-----------------------------------------
+    t |
+    1 |  *       *       *       *       *
+    2 |    *       *       *       *       *
+    3 |      *       *       *       *       *
+    4 |        *       *       *       *       *
+
+       #+end_src
+
+*Code*
+#+begin_src c
+ #pragma omp parallel for default(shared) private(i) schedule(static,1)
+ for (j = 0; j < N; j++) {
+   for (i = 0; i < M; i++)
+     // Update V(v,i,j)
+ }
+  #+end_src
+
+  *Analysis*
+- j is parallelized so in each iteration while reading it's cool because on the left and right sides ~a[i-1] and a[i + 1]~ the cache line would already have been loaded but the problem happens when writing data.
+- Shared data on left and right side for each thread's update - ie ~a[i-1] amd a[i + 1]~ is being accessed by multiple threads at the same time. The modifications of the same cache happen in rapid succession by different threads. All of these conditions lead to what's called false sharing, where each update will cause the cache line to "ping-pong between the threads" (idea gained from [2] slide 35 and seen lecture slides for more details)
+
+** Testing Methodolgy
+- Performance model was tested in one node through strong scaling on ~OMP_NUM_THREADS~ for all metrics.
+- The parameters were chosen to distribute all the nodes equally so M and N were both =divisible by 48=. The focus was on computation aspect so suitably large value of M and N were chosen. So for testing purposes I chose ~M=N=2160~ and remain unchanged since strong scaling was needed.
+- Number of reps was taken to be 100 (sufficiently large)
+
+** Results
+~M = 2160 N = 2160 reps = 100~
+#+CAPTION: Strong scaling with different number of threads on single node on different metrics
+|----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------|
+| *Metric* | *N_T*     |         1 |         3 |         6 |        12 |        24 |        48 |
+|----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------|
+| (a)      | *A_T*     | 1.93e+00s | 7.20e-01s | 4.32e-01s | 3.34e-01s | 4.95e-01s | 2.52e+00s |
+|          | *G_F*     |  4.83e+00 |  1.30e+01 |  2.16e+01 |  2.79e+01 |  1.89e+01 |  3.71e+00 |
+|          | *P_C*     |  4.83e+00 |  4.32e+00 |  3.60e+00 |  2.33e+00 |  7.86e-01 |  7.72e-02 |
+|          | *Speedup* |         1 |      2.68 |      4.66 |      5.77 |      3.89 |      0.76 |
+|----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------|
+| (b)      | *A_T*     | 5.84e+00s | 1.86e+00s | 1.14e+00s | 1.02e+00s | 3.57e+01s | 4.73e+00s |
+|          | *G_F*     |  1.60e+00 |  5.02e+00 |  8.18e+00 |  9.19e+00 |  2.61e-01 |  1.97e+00 |
+|          | *P_C*     |  1.60e+00 |  1.67e+00 |  1.36e+00 |  7.66e-01 |  1.09e-02 |  4.11e-02 |
+|          | *Speedup* |         1 |      3.13 |      5.12 |      5.72 |      1.63 |       1.2 |
+|----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------|
+| (c)      | *A_T*     | 1.93e+00s | 7.41e-01s | 4.58e-01s | 3.99e-01s | 5.30e-01s | 2.72e+00s |
+|          | *G_F*     |  4.84e+00 |  1.26e+01 |  2.04e+01 |  2.34e+01 |  1.76e+01 |  3.43e+00 |
+|          | *P_C*     |  4.84e+00 |  4.20e+00 |  3.39e+00 |  1.95e+00 |  7.34e-01 |  7.14e-02 |
+|          | *Speedup* |         1 |      2.60 |      4.21 |      5.77 |      3.64 |      0.74 |
+|----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------|
+| (d)      | *A_T*     | 5.78e+00s | 3.38e+00s | 1.62e+00s | 1.25e+00s | 3.61e+01s |         0 |
+|          | *G_F*     |  1.62e+00 |  2.76e+00 |  5.76e+00 |  7.46e+00 |  2.59e-01 |         0 |
+|          | *P_C*     |  1.62e+00 |  9.20e-01 |  9.60e-01 |  6.22e-01 |  1.08e-02 |         0 |
+|          | *Speedup* |         1 |      1.71 |      3.56 |      4.62 |      0.16 |         0 |
+|----------+-----------+-----------+-----------+-----------+-----------+-----------+-----------|
+- In (d) I have inputted 0 since it the operation was timed out (Walltime used was 1 minute)
+- Metric (a) and (c) perform similarly and the same holds for metric (b) and (d)
+- Metric (a) and (c) perform significantly faster than (b) and (d), which little differences within them
+- That would be indicative of the fact that when a simple OpenMP policy is applied, optimizing it becomes less worth it.
+- After ~OMP_NUM_THREADS > 12~ we see a heavy performance drop in most cases (since ~numactl~ has a limit of 12)
+- So best version would use 12 threads (note for the future questions)
+* Performance Modelling of Shared Memory Programs
+Let ts denote the cost of a parallel region entry/exit, and tw,R and tw,W denote the cost per (double) word of a cache miss for coherent read and writes, respectively. By counting the expected number of these events in cases 1 to 4 above, and using your measurements from the previous question, derive values for these parameters for the value of p in your experiments in Q1 where the performance of case (1) was best.
+
+Construct a performance model for the best-performing variant (hint: it should be similar to the 1D model you used in Assignment 1). You may neglect the update of the boundary in your model. Discuss whether the ts and tw values are comparable with what you obtained for single-node MPI (note that you are not being asked to compare your model's predictions with the actual performance in this assignment)
+
+We take the following parameters
+~M = N = 2160, P = 12, r = 100~ - P is taken 12 because of the last question
+** Parallel region startup t_s
+For parallel region startup or exit, we divide the final result by 2, assuming that it takes half the time to enter and half the time to exit. Assuming that each thread creates only 1 (it's own parallel region once during i loop) in metric 1 and creates ~2M~ according to metric 2, ~t_s~ would be:
+  #+BEGIN_EXPORT latex
+  \[
+  T_{s} = \frac{1}{2}\frac{t_{(b)} - t_{(a)}}{\text{Total Parallel regions by each thread}} \\
+          = \frac{1}{2}\frac{1.02 - 0.334}{Mr} \\
+          = \frac{1}{2}\frac{0.686}{2160 * 100} \\
+          = 1.587 us
+  \]
+  #+end_export
+- *T_s in OpenMP vs t_w in MPI*
+
+  #+begin_src
+  1.587us vs 0.9 us (Taken from Assignment 1)
+  #+end_src
+- *T_s* suprisingly more in OpenMP than MPI
+** Cost of double word on cache miss on coherent read
+We know that total words being communicated since we have set it to ~schedule(static,1)~ on the outermost row, every cell will try to read 2 values with cache misses (one on it's left and one on it's right). So we divide the final result by 2.
+  #+BEGIN_EXPORT latex
+  \[
+  T_{w,R} = \frac{t_{(c)} - t_{(a)}}{\text{Total words communicated}} \\
+          = \frac{0.399 - 0.334}{2MNr}
+          = \frac{0.399 - 0.334}{2 * 2160 * 2160 * 100}
+          = 5.07e-10
+  \]
+  #+end_export
+
+** Cost of double word on cache miss on coherent write
+Every cell will try to write 2 values with cache misses (one on it's left and one on it's right). So we divide the final result by 2.
+   #+BEGIN_EXPORT latex
+ \[
+ T_{w,R} = \frac{t_{(d)} - t_{(a)}}{\text{Total words communicated}} \\
+        = \frac{1.25 - 0.334}{2MNr}
+        = \frac{1.25 - 0.334}{2 * 2160 * 2160 * 100}
+        = 1.335e-09
+
+\]
+  #+end_export
+- T_{w,W} + T_{w, R} in OpenMP vs t_w in MPI
+  #+begin_src
+  5.07e-10 + 1.335e-09 vs  5.67e-09 (taken from Assignment 1)
+  = 1.842e-09 (OpenMP) vs 5.67e-09 (MPI)
+  #+end_src
+  OpenMP's ~t_w~ is around 3 times faster of what's present in ~MPI~
+
+Hence ~t_w~ for OpenMP are less than what's present in MPI (maybe because both sending and receiving happens in MPI - that would take more operations + synchronization than the corresponding implementation in ~OpenMP~)
+** Performance Model for best variant
+
+- *Parallel computation/communication*
+  Considering 9 floating operations in 9 point stencil to ~updateAdvect~ and 1 operation copy back for each points 18 cycles). Also 2 rows in top/bottom halo exchange. Time to enter parallel region + time to exit parallel region = 2 * t_s
+    #+BEGIN_EXPORT latex
+    \begin{align*}
+  T_{par} &= T_{copy} + T_{update} + T_{left/right} \\
+          &= 2 t_s + 2 \frac{N}{P} t_f + 18 \frac{MN.t_f}{P}
+  \end{align*}
+  #+end_export
+- In T_update, ~N/P~ is done if ~Q=1~ else ~N/Q~ is done
+- *Sequential computation*
+      #+BEGIN_EXPORT latex
+    \begin{align*}
+  T_{seq} &= t_{left/right} \\
+          &= 2 \frac{M}{P} t_f
+  \end{align*}
+  #+end_export
+- Total time
+        #+BEGIN_EXPORT latex
+    \begin{align*}
+  T_{tot} &= r . (2 t_s + 2 \frac{N}{P} t_f + 18 \frac{MN.t_f}{P} + 2 \frac{M}{P} t_f)
+  \end{align*}
+    #+end_export
+* Parallelization via 2D Decomposition and an Extended Parallel Region
+** Approach
+- To work on a single parallel region first, I calculated the starting and ending indices of each thread and then manually assigned different loop indices to different threads. Then I used those indices to work with ~omp1dUpdateAdvectField()~, ~omp1dCopyField()~, ~omp1dBoundaryRegions()~ and ~updateBoundary~. Finally, I also used the result of ~OMP_NUM_THREADS=12~ from previous question to use in this one.
+- To work only in one boundary at a time in a single parallel region at once - this time I also parallelized the left and right halo exchange (at the cost of potential cache misses - although the indices are already loaded and top and bottom halo can have slight load imbalance)
+- Generally, no barrier is needed after left and right halo exchange in 2D grids, however when ~(Q=1 and P > 1)~ 1D case it is needed, so I added an edge case of a conditional barrier in the extreme case of ~Q=1~
+** Results
+- ~M = N = 2160 (2 * L_3 cache has around 70 MB memory) OMP_NUM_THREADS=12~
+#+CAPTION: Computation for 2D process grids (1 Node) with Q >= 1
+|-----+-----+----------+----------+----------+-----------|
+| *P* | *Q* |    *A_T* |    *G_F* |    *P_C* | *Speedup* |
+|-----+-----+----------+----------+----------+-----------|
+|   1 |  12 | 4.48e-01 | 2.08e+01 | 1.74e+00 |      0.72 |
+|   2 |   6 | 3.75e-01 | 2.49e+01 | 2.07e+00 |      0.86 |
+|   3 |   4 | 3.57e-02 | 2.62e+01 | 2.18e+00 |      0.91 |
+|   4 |   3 | 3.48e-01 | 2.68e+01 | 2.24e+00 |      0.93 |
+|   6 |   2 | 3.40e-01 | 1.74e+01 | 2.28e+00 |      0.95 |
+|  12 |   1 | 3.27e-01 | 2.86e+01 | 2.38e+00 |         1 |
+|-----+-----+----------+----------+----------+-----------|
+
+- A significant decrease of of minimum 9-11% was found when distributing evenly across columns
+- Distributing in row fashion after threads have been initialized still gives us the maximum speedup. This would be because each thread gets maximum cache reads
+- Here, speedup is taken w.r.t Q = 1 unlike in previous table
+* Further Optimizations OpenMP
+  - One of the main optimizations was that The copying overhead is removed for larger number of iterations. (inspired from Piazza post of  potential optimizations in assignment 1)
+  - This Improved performance by a lot
+**  Results
+- On ~P = Q = 2160~ with division of ~P,Q 12,1~ - we see a speedup of around 50%
+  #+CAPTION: Results on optimized version of OpenMP
+  |------+------+----------+----------+----------+------------+------------+------------+-----------|
+  |  *M* |  *N* |    *A_T* |    *G_F* |    *P_C* | *A_T (-o)* | *G_F (-o)* | *P_C (-o)* | *Speedup* |
+  |------+------+----------+----------+----------+------------+------------+------------+-----------|
+  | 1080 | 1080 | 4.88e-02 | 4.78e+01 | 3.98e+00 |   5.34e-02 |   4.37e+01 |   3.64e+00 |      0.91 |
+  | 2160 | 2160 | 3.29e-01 | 2.84e+01 | 2.36e+00 |   1.86e-01 |   5.03e+01 |   4.19e+00 |      1.77 |
+  | 4320 | 4320 | 1.59e+00 | 2.35e+01 | 1.96e+00 |   8.08e-01 |   4.62e+01 |   3.85e+00 |      1.63 |
+  |------+------+----------+----------+----------+------------+------------+------------+-----------|
+
+- We see that in the optimized version the per core speed pretty much remains the same (whereas in unoptimized version the per core speed decreases - because of more writing in memory in each iteration).
+
+* References
+[1] http://jakascorner.com/blog/2016/06/omp-for-scheduling.html
+
+[2] http://akira.ruc.dk/~keld/teaching/IPDC_f10/Slides/pdf4x/4_Performance.4x.pdf
+
+[3] https://piazza.com/class/kkeyidkqw3h21i?cid=187
+* Acknowledgements
+ - Done individually and with heavy help from Piazza/COMP4300 Practicals/Piazza.

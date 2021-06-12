@@ -1,4 +1,4 @@
-#+TITLE: Assignment 1 COMP4300
+#+TITLE: Advection Solver using MPI
 #+OPTIONS: toc:nil num:2
 #+LaTex_header: \input{header.tex}
 #+LATEX: \setlength\parindent{0pt}
@@ -445,4 +445,3 @@ We see a Similar performance to Q4 with it being slightly slow at some points (b
 
 * Acknowledgements
  - Done individually and with help from Piazza/COMP4300 Practicals.
- - One thing which could be improved was providing some sort of visualization to the proposed question which asks the algorithm to be implemented. Rather than being asked in Piazza (like the examples of Q5 and Q6), which would save the student so much time in understanding and executing the correct algorithm.

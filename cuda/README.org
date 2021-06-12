@@ -1,0 +1,162 @@
+#+TITLE: Advection Solver using Cuda
+#+OPTIONS: toc:nil num:2
+#+LaTex_header: \input{header.tex}
+#+LATEX: \setlength\parindent{0pt}
+#+LATEX_COMPILER: xelatex
+#+AUTHOR: Abhaas Goyal (u7145384)
+
+#+CAPTION: Table abbreviations
+|-------+----------------------|
+| *A_T* | Advection Time       |
+| *G_F* | Gigaflops per second |
+| *P_C* | Per core (with G_F)  |
+| *N_T* | Number of threads    |
+| *NP*  | Number of processes  |
+| *C_T* | Calculated time      |
+| *I_T* | Instruction type     |
+|-------+----------------------|
+
+* Baseline GPU Implementation
+** Testing methodology
+- Worked with first copying data into GPU main memory and copying back to host memory when operation is completed (to maximize bandwidth)
+- In general, GPUs work well with large sizes (and not small ones). So we take large parameters in this case ~M=N=4096~ (divisible by ~32 * 32~ - warp size)
+- Varying block sizes with 2D warp size of 1024 (that means ~Bx * By = 1024~ )
+- For ~Gx and Gy~, it has to be in the powers of 2 (maximum even block distribution) and more number of blocks would be needed. To see the increase in varying block sizes, ~Gx and Gy~ start from 1,1 and go all the way to 64,64
+- We also take ~r=10~ to not slow down the tests for small values of ~Gx and Gy~ (at the same time also hiding the time to copy back and forth from memory - as tested in nvprof)
+** Results
+~M = 4096 N = 4096 reps = 10~
+#+CAPTION: Performance comparision between various values of (Gx, Gy) and (Bx, By)
+|------+------+------+------+-----------+----------+-----------|
+| *Gx* | *Gy* | *Bx* | *By* | *A_T*     |    *G_F* | *Speedup* |
+|------+------+------+------+-----------+----------+-----------|
+|    1 |    1 |   16 |   64 | 1.46e+00s | 2.30e+00 |      1.02 |
+|    1 |    1 |   32 |   32 | 1.50e+00s | 2.24e+00 |  1 (ref.) |
+|    1 |    1 |   64 |   16 | 1.55e+00s | 2.17e+00 |      0.96 |
+|------+------+------+------+-----------+----------+-----------|
+|    2 |    2 |   16 |   64 | 3.97e-01s | 8.46e+00 |      3.77 |
+|    2 |    2 |   32 |   32 | 4.00e-01s | 8.39e+00 |      3.74 |
+|    2 |    2 |   64 |   16 | 4.36e-01s | 7.70e+00 |      3.43 |
+|------+------+------+------+-----------+----------+-----------|
+|    4 |    4 |   16 |   64 | 2.14e-01s | 1.57e+01 |         7 |
+|    4 |    4 |   32 |   32 | 2.80e-01s | 1.20e+01 |      5.35 |
+|    4 |    4 |   64 |   16 | 2.87e-01s | 1.17e+01 |      5.22 |
+|------+------+------+------+-----------+----------+-----------|
+|    8 |    8 |    8 |  128 | 9.28e-02s | 3.62e+01 |     16.16 |
+|    8 |    8 |   16 |   64 | 2.90e-01s | 1.16e+01 |      5.17 |
+|    8 |    8 |   32 |   32 | 5.80e-01s | 5.78e+00 |      2.58 |
+|    8 |    8 |   64 |   16 | 6.39e-01s | 5.25e+00 |      2.34 |
+|------+------+------+------+-----------+----------+-----------|
+|   16 |   16 |    4 |  256 | 2.67e-02s | 1.26e+01 |     5.625 |
+|   16 |   16 |    8 |  128 | 4.04e-02s | 8.31e+01 |     37.09 |
+|   16 |   16 |   16 |   64 | 1.48e-01s | 2.27e+01 |     10.13 |
+|   16 |   16 |   32 |   32 | 4.99e-01s | 6.73e+00 |      3.00 |
+|   16 |   16 |   64 |   16 | 6.26e-01s | 5.36e+00 |      2.39 |
+|   16 |   16 |  128 |    8 | 5.88e-01s | 5.71e+00 |      2.54 |
+|   16 |   16 |  256 |    4 | 4.11e-01s | 8.16e+00 |      3.64 |
+|------+------+------+------+-----------+----------+-----------|
+|   32 |   32 |    1 | 1024 | 1.72e+00s | 1.95e+00 |      0.87 |
+|   32 |   32 |    2 |  512 | 9.70e-01s | 3.46e+00 |      1.54 |
+|   32 |   32 |    4 |  256 | 5.15e-01s | 6.52e+00 |      2.91 |
+|   32 |   32 |    8 |  128 | 3.81e-02s | 8.80e+01 |     39.28 |
+|   32 |   32 |   16 |   64 | 5.35e-02s | 6.27e+01 |      2.79 |
+|   32 |   32 |   32 |   32 | 2.14e-01s | 1.57e+01 |      7.00 |
+|   32 |   32 |   64 |   16 | 3.81e-01s | 8.81e+00 |      3.93 |
+|   32 |   32 |  128 |    8 | 3.69e-01s | 9.08e+00 |      4.05 |
+|   32 |   32 |  256 |    4 | 7.33e-01s | 4.58e+00 |      2.04 |
+|   32 |   32 |  512 |    2 | 9.78e-01s | 3.43e+00 |      1.53 |
+|   32 |   32 | 1024 |    1 | 1.59e+00s | 2.12e+00 |      0.94 |
+|------+------+------+------+-----------+----------+-----------|
+|   64 |   64 |   16 |   64 | 4.72e-02s | 7.11e+01 |     31.74 |
+|   64 |   64 |   32 |   32 | 3.84e-02s | 8.75e+01 |     39.06 |
+|   64 |   64 |   64 |   16 | 4.83e-02s | 6.95e+01 |     31.02 |
+|------+------+------+------+-----------+----------+-----------|
+- Gx and Gy start to make sense to apply after ~(Gx, Gy) >= 32~
+- 3 variants of ~(Bx,By)~ make the most sense here consistently after ~Gx~ and ~Gy~ are decided - (8,128) (32,32) and (128,8)
+- The best performing variant for this particular case would be ~(Gx, Gy, Bx, By) = (32,32,8,128)~. However, for the more general case - ~(Gx,Gy) = (32,32)~ gave the best results
+** Comparing with CPU and serial GPU
+- Finally, comparing with the results of CPU and serial GPU implementation at this speed
+
+
+|-------+-----------+----------+-----------|
+| *I_T* | *A_T*     |    *G_F* | *Speedup* |
+|-------+-----------+----------+-----------|
+| -s    | 5.05e+01s | 6.64e-02 |    760.54 |
+| -h    | 1.09e+00s | 3.09e+00 |     28.47 |
+|-------+-----------+----------+-----------|
+- We see a huge speedup from serial implementation of the GPU (around 750x)
+- We also see around 30x increase from the initial CPU variant.
+** Kernel overhead
+- I saw that the best way to determine kernel overhead would be to minimize the time within the function being actually called and at the same time it should be possible to invoke the kernel itself, so I called ~M = 1, N = 1 r=100~. Note that I used a good value for ~r~ to give consistent results
+- The result was 1.63e-03s in advection time for 100 repetions - which means around ~1.6us~ is spent for each iteration
+- There are 4 kernels being called, so on average each kernel takes ~0.4us~ to load in each iteration.
+** Other optimizations
+- Use it in conjunction with MPI (in which MPI is used in communication and OpenMP is used in Computation)
+
+* Optimized GPU Implementation
+** Implementation
+- I used the concept of a custom tiled stencil, where each tiles is of size ~(Bx,By)~. Each thread is mapped to one location of the tiled memory during one iteration of i and j (padding is also done for the cases of uneven block distribution not being divisible by ~Bx or By~ - intuition given in [3]). There are 3 major steps to this algorithm:
+  1. Load into ~__shared__~ memory the answer of applying a part of the stencil on 3 contiguous memory addresses by all threads in a single block at one time. The total reads from each memory address would be <=3 (in the best case 1) since contiguous memory is being loaded so most accessed memory would be in each block's register (just a hypothesis).
+     #+begin_src c
+        V_(aData, By, 1 + tdx, tdy) = cjm1 * V(u, tp_i, tp_j - 1) +
+                                      cj0 * V(u, tp_i, tp_j) +
+                                      cjp1 * V(u, tp_i, tp_j + 1);
+     #+end_src
+     Corner cases of top and bottom rows would also need to be handled for correctly doing step 2.
+  2. Since ~__shared__~ memory is scrachpad memory, accessing every element in it takes equal time. Do the remaining operation of accessing (j-1), j and (j+1) element - which already contains the weighted sum of 3 contiguous elements, and reuse it to do the remaining operation.
+
+     #+begin_src
+        V_(bData, By, tdx, tdy) = cim1 * V_(aData, By, tdx, tdy) +
+                                  ci0 * V_(aData, By, tdx + 1, tdy) +
+                                  cip1 * V_(aData, By, tdx + 2, tdy);
+     #+end_src
+   3. Finally, copy back the result in Cuda memory and do the same process in the next iteration
+- Similar to OpenMP's optimized implementation, another optimization was inspired from Piazza, where I removed the operation of copying back elements to ~u~ in each iteration. (pretty nice optimization as seen by the results given below)
+** Results
+~M = N = 2048 Gx = Gy = Bx = By = 32  reps = 100~
+#+CAPTION: Performance for different field sizes in baseline vs optimized version in CUDA
+|------+------+-----------+----------+------------+----------+-----------|
+|  *M* |  *N* | *A_T*     |    *G_F* | *A_T (-o)* |    *G_F* | *Speedup* |
+|------+------+-----------+----------+------------+----------+-----------|
+| 2048 | 2048 | 1.21e-02s | 6.91e+01 |   1.72e-02 | 4.87e+01 |       0.7 |
+| 4096 | 4096 | 3.81e-02s | 8.80e+01 |   4.16e-02 | 8.06e+02 |      0.91 |
+| 8192 | 8192 | 1.41e-01s | 9.54e+01 |   1.34e-01 | 1.00e+02 |      1.05 |
+|------+------+-----------+----------+------------+----------+-----------|
+
+
+- This difference would be propounded by a huge factor if repetitions are large (since I have removed ~copyFieldKP~ to be done at the last, is only done in GPU memory anymore), the above tests are biased towards ~updateAdvectFieldOPN~
+- When number of iterations are high, then I gained an efficiency of 70-80% through ~copyFieldKP~ and ~5-10%~ through ~updateAdvectFieldOPN~  (tested using ~nvprof~).
+* Comparison of various Programming Models
+** Performance
+- CUDA's model works better for large size inputs (M, N> 4096) - that means there are limits to bandwidth in the CPU for large scale inputs and highly parallel architecture is best for this problem statement.
+- MPI's model works best in smaller range and works in-between in heavy cases (better than OpenMP but worse than CUDA as mentioned)
+- OpenMP's model works the worst (since minimum parallelism to a embarissingly parallel problem is being applied here) - even though the CPUs are fast
+- The performance metric is different for CUDA and OpenMP vs MPI's model, since the focus of the MPI model relied on efficient communication rather than computation (~updateBoundary~), so there was a huge focus on exchanging halo boundaries. It's the opposite case for OpenMP and CUDA we wanted to efficiently compute the 9 point stencil update in ~updateAdvectField~ instead.
+** Difficulty in implementation (personal views)
+- Doing the initial version of CUDA was easy/moderate, however finding potential optimizations and applying it was the hardest to do out of all. Mapping the threads to the correct locations in the tile, finding those optimizations and doing padding for uneven sized inputs was the hardest to do.
+- Creating MPI's distributed system was second hardest (similar difficulty for all variants - 1D, 2D, overlapping and wide halo) - once you get the right frame of mind of what exactly to apply and what section to communicate, the corresponding implementation is not that hard.
+- OpenMP was easiest to do but it didn't gave the worst results out of the three - with little room on optimization (from their initial policy)
+
+* CUDA Results on Gadi GPU's
+- GPU used in Gadi- ~1 x Tesla V100-SXM2-32GB~
+- Testing methodology was to vary M and N with different values and compare the speedup with similar performing version of RTX2080
+** Results
+~M = N =  reps = 100 -o on Tesla V100-SXM2-32GB~
+#+CAPTION: Performance for optimized parameters in Nvidia Tesla
+|------+------+----------+----------+-----------------------|
+|  *M* |  *N* |    *A_T* |    *G_F* | *Speedup wrt RTX2080* |
+|------+------+----------+----------+-----------------------|
+| 2048 | 2048 | 7.52e-03 | 1.12e+02 |                 1.62  |
+| 4096 | 4096 | 2.21e-02 | 1.52e+02 |                 1.72  |
+| 8192 | 8192 | 8.32e-02 | 1.61e+02 |                 1.68  |
+|------+------+----------+----------+-----------------------|
+
+Around consistent 70% improvement on a single GPU of Tesla. Since the size of Device memory on Tesla is pretty high (32GB), multiple copies of it can be used in larger scales than RTX variant
+
+* References
+[1] http://jakascorner.com/blog/2016/06/omp-for-scheduling.html
+
+[2] http://akira.ruc.dk/~keld/teaching/IPDC_f10/Slides/pdf4x/4_Performance.4x.pdf
+
+[3] https://piazza.com/class/kkeyidkqw3h21i?cid=187
+* Acknowledgements
+ - Done individually and with heavy help from Piazza/COMP4300 Practicals/Piazza.
